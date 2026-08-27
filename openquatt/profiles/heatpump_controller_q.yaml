@@ -51,8 +51,8 @@ substitutions:
   ds18b20_pin: "GPIO18"                                 # Dallas DS18B20 1-Wire input.
   oq_boiler_relay_pin: "GPIO16"                         # Relay 1 output.
   controller_aux_relay_pin: "GPIO3"                     # Relay 2 output reserved for controller logic.
-  oq_intuis_pv_eco_pin: "GPIO8"                         # Intuis PV ECO volt-free contact (external relay ch1).
-  oq_intuis_pv_max_pin: "GPIO17"                        # Intuis PV MAX volt-free contact (external relay ch2).
+  oq_intuis_pv_eco_pin: "GPIO43"                        # Intuis PV ECO contact; header pin, also U0TXD.
+  oq_intuis_pv_max_pin: "GPIO44"                        # Intuis PV MAX contact; header pin, no ROM boot output.
   oq_intuis_relay_inverted: "true"                      # Opto-isolated relay modules usually switch on a LOW input.
   web_auth_recovery_pin: "GPIO46"                       # Boot switch / recovery input.
   eth_mosi_pin: "GPIO10"                                # W5500 SPI MOSI.

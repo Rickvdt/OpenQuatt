@@ -27,21 +27,42 @@ so the firmware never asserts both: each mode writes one exclusive pattern.
 Tank temperature reuses the existing `T` connector; the PV contacts use an
 external 2-channel opto-isolated relay module.
 
+The board (V1.1) carries two 4-pin expansion headers next to the ESP32-S3:
+
+- `+5V` / `CLK` / `SDO` / `SDI` — the `CLK`/`SDO`/`SDI` pins are a breakout of the
+  PT1000 SPI bus and are **not** free. Only `+5V` is used here.
+- `+3.3V` / `GPIO43` / `GPIO44` / `GND` — the two free GPIOs, plus ground.
+
 | Board | Relay module | Boiler |
 |---|---|---|
-| `5V` | `VCC` | — |
-| `GND` | `GND` | — |
-| `GPIO8` | `IN1` | ch1 `COM` + `NO` → PV connector **1** (PV ECO) |
-| `GPIO17` | `IN2` | ch2 `COM` + `NO` → PV connector **2** (PV MAX) |
+| `+5V` (SPI header) | `VCC` | — |
+| `GND` (GPIO header) | `GND` | — |
+| `GPIO43` (GPIO header) | `IN1` | ch1 `COM` + `NO` → PV connector **1** (PV ECO) |
+| `GPIO44` (GPIO header) | `IN2` | ch2 `COM` + `NO` → PV connector **2** (PV MAX) |
 | `T`: `+3.3V` / `GND` / `DATA` | — | DS18B20 strapped to the tank |
 
-GPIO8 and GPIO17 are the only free GPIOs on the Q-edition; everything else is
-taken by flash, PSRAM, USB, the logger UART or an existing function. Neither is a
-strapping pin.
+`GPIO43` and `GPIO44` are the only free GPIOs brought out to a header. Other
+ESP32-S3 pins are electrically unused but not accessible on this board. Neither
+is a strapping pin, and the console runs over `USB_SERIAL_JTAG` (ESPHome's
+default for this build) rather than UART0, so nothing else drives them at
+runtime.
 
 Most 2-channel relay modules switch on a **LOW** input, which is why
 `oq_intuis_relay_inverted` defaults to `"true"` in the hardware profile. If the
 relays engage on boot or behave inverted, set it to `"false"` and rebuild.
+
+> [!NOTE]
+> `GPIO43` is `U0TXD`. The ESP32-S3 ROM bootloader prints a short boot message on
+> it at every reset, before the firmware runs — that is hardware behaviour and no
+> firmware setting suppresses it. With active-low wiring the idle level is HIGH
+> (relay released) and the boot-log pulses last microseconds, far too short to
+> energise a mechanical relay coil. PV ECO is deliberately assigned to `GPIO43`
+> and PV MAX to `GPIO44`, which has no ROM output, so the electric back-up sits
+> on the quieter pin. This is a further reason to keep the wiring active-low.
+
+The GPIO header is 3.3 V logic while the relay module is powered from 5 V. Most
+opto-isolated modules trigger reliably from 3.3 V, but if one channel refuses to
+switch, a marginal opto input is the first thing to suspect.
 
 ## Boiler-side settings
 
@@ -112,6 +133,7 @@ wiring order, so adding a probe can silently swap which one is read.
    through `PV ECO` and `PV MAX` and confirm the two diagnostic contact sensors
    follow, and that only ever one is on.
 3. Verify relay polarity: no channel should be engaged while the mode is `Off`.
+   Also reset the board and confirm neither relay latches during boot.
 4. Connect the relay outputs to the boiler's PV connectors 1 and 2.
 5. Select `PV MAX` and confirm the boiler's display shows photovoltaic mode
    active and raises its target temperature.
