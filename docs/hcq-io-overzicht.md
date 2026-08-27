@@ -30,6 +30,8 @@ Gebruik voor de CV-ketel altijd precies één route: `OTB` of `R1`, nooit beide 
 | Flowmeter-puls | `Q` | GPIO-ingang met pull-up | `GPIO15` |
 | CV-ketelrelais | `R1` | GPIO-uitgang | `GPIO16` |
 | Hulprelais | `R2` | GPIO-uitgang | `GPIO3` |
+| Intuis PV ECO-contact | Extern relais ch1 | GPIO-uitgang | `GPIO8` |
+| Intuis PV MAX-contact | Extern relais ch2 | GPIO-uitgang | `GPIO17` |
 | DS18B20 | `T` | 1-Wire | `GPIO18` |
 | OpenTherm thermostaat | `OTT` | slave: in/uit | in `GPIO21`, uit `GPIO14` |
 | OpenTherm CV-ketel | `OTB` | master: in/uit | in `GPIO47`, uit `GPIO48` |
@@ -57,6 +59,8 @@ De pulslezer op `GPIO15` heeft een interne pull-up en een filter van 100 µs. De
 ### T: DS18B20
 
 `T` is de 1-Wire-bus voor een optionele Dallas/DS18B20. Kies deze bron alleen als de lokale aanvoertemperatuur op `DS18B20` staat.
+
+In deze fork is de DS18B20 herbestemd als tanksensor van de Intuis Edel Eau 270/3; zie [Intuis Edel Eau 270/3](intuis-edel-eau-270.md). Laat de lokale aanvoertemperatuur daarom op `PT1000` staan.
 
 ### OTT en OTB: OpenTherm
 

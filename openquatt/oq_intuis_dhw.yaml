@@ -1,0 +1,267 @@
+# ==============================================================================
+# OpenQuatt - Intuis Edel Eau DHW Heat Pump Boiler (PV mode + tank temperature)
+# ==============================================================================
+#
+# Goal:
+#   Read the domestic-hot-water tank temperature and drive the two volt-free
+#   PV inputs of an Intuis Edel Eau 270/3 boiler, so a Home Assistant
+#   automation can park surplus solar production in the DHW tank.
+#
+# Role in architecture:
+#   Standalone add-on. Owner of the two PV contact outputs and of the tank
+#   temperature reading. It observes nothing from OpenQuatt and influences no
+#   Quatt heating, cooling, flow or boiler logic.
+#
+# What this package DOES do:
+#   - Publish the tank temperature from a DS18B20 on the shared 1-Wire bus
+#   - Expose one PV mode selector (Off / PV ECO / PV MAX) as the single control
+#   - Drive two volt-free contacts through an external 2-channel relay module
+#   - Keep both contacts mutually exclusive at all times
+#   - Enforce a configurable minimum hold time on PV ECO only, because the
+#     boiler manual asks for a minimum activation time
+#   - Publish the actual contact states and a short status/reason for diagnostics
+#
+# What this package DOES NOT do:
+#   - Does not read or write any Quatt control state, Control Mode or strategy
+#   - Does not decide when solar surplus exists; Home Assistant owns that
+#   - Does not time-limit PV MAX; Home Assistant owns boost duration
+#   - Does not set the boiler's PV target temperatures; those live in the
+#     boiler's own installer menu
+#   - Does not touch R1, R2, OpenTherm or the PT1000 supply path
+#
+# Key assumptions:
+#   - The DS18B20 on the `T` connector measures the DHW tank, not supply water.
+#     It is the only device on that 1-Wire bus, so `index: 0` is unambiguous.
+#   - `PV mode` is set to `ja` in the boiler installer menu; without that the
+#     boiler ignores both contacts.
+#   - Contact 1 = PV ECO (heat pump only), contact 2 = PV MAX (heat pump plus
+#     electric back-up). Both are volt-free and must never see 230 V.
+#   - The relay module is opto-isolated and active-low by default; polarity is
+#     set through `oq_intuis_relay_inverted` in the hardware profile.
+#
+# Safety / fail-safe:
+#   - Both outputs restore OFF on boot and stay OFF until the control loop runs
+#   - The PV mode selector deliberately does NOT restore across a reboot, so a
+#     power cut can never leave the electric back-up asserted unattended
+#   - Asserting both contacts at once is structurally impossible; the loop
+#     writes one exclusive pattern per mode
+#   - An unknown or invalid mode resolves to Off
+#   - Escalating to a higher mode is always immediate
+#   - Leaving PV ECO downwards is rate-limited; leaving PV MAX is immediate,
+#     so a Home Assistant boost can be cancelled at any time
+#
+# ==============================================================================
+
+# ----------------------------
+# INTERNAL STATE
+# ----------------------------
+globals:
+  # Requested mode; written only by the PV mode selector.
+  # 0 = Off, 1 = PV ECO, 2 = PV MAX.
+  - id: oq_intuis_pv_requested_mode
+    type: int
+    restore_value: false
+    initial_value: "0"
+
+  # Applied mode; written only by the main loop, which owns both outputs.
+  - id: oq_intuis_pv_applied_mode
+    type: int
+    restore_value: false
+    initial_value: "0"
+
+  # Millis timestamp of the last applied-mode change; drives the hold timer.
+  - id: oq_intuis_pv_applied_since_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+
+# ----------------------------
+# PHYSICAL OUTPUTS
+# ----------------------------
+output:
+  - platform: gpio
+    id: oq_intuis_pv_eco_out
+    pin:
+      number: ${oq_intuis_pv_eco_pin}
+      # Most opto-isolated relay modules switch on a LOW input.
+      inverted: ${oq_intuis_relay_inverted}
+
+  - platform: gpio
+    id: oq_intuis_pv_max_out
+    pin:
+      number: ${oq_intuis_pv_max_pin}
+      inverted: ${oq_intuis_relay_inverted}
+
+# ----------------------------
+# CONTROL
+# ----------------------------
+switch:
+  # Internal only: the main loop is the single writer of both contacts.
+  - platform: output
+    id: oq_intuis_pv_eco_relay
+    output: oq_intuis_pv_eco_out
+    internal: true
+    restore_mode: ALWAYS_OFF
+
+  - platform: output
+    id: oq_intuis_pv_max_relay
+    output: oq_intuis_pv_max_out
+    internal: true
+    restore_mode: ALWAYS_OFF
+
+select:
+  # The single user-facing control. Option order defines the mode code, so the
+  # selector index maps directly onto the requested-mode global.
+  - platform: template
+    id: oq_intuis_pv_mode
+    name: "Intuis PV Mode"
+    icon: mdi:solar-power-variant
+    optimistic: true
+    # Deliberately not restored: never resume electric back-up heating by itself.
+    restore_value: false
+    options:
+      - "Off"
+      - "PV ECO"
+      - "PV MAX"
+    initial_option: "Off"
+    on_value:
+      - lambda: |-
+          // The loop owns the outputs; only record the request here.
+          id(oq_intuis_pv_requested_mode) = static_cast<int>(i);
+
+number:
+  - platform: template
+    id: oq_intuis_pv_eco_min_hold_minutes
+    name: "Intuis PV ECO Minimum Hold"
+    icon: mdi:timer-lock-outline
+    unit_of_measurement: "min"
+    min_value: 0
+    max_value: 240
+    step: 5
+    mode: box
+    optimistic: true
+    restore_value: true
+    # The boiler manual recommends at least one hour of PV activation.
+    # Applies to PV ECO only; PV MAX boost timing belongs to Home Assistant.
+    initial_value: 60
+    entity_category: config
+
+# ----------------------------
+# PUBLISHED ENTITIES
+# ----------------------------
+binary_sensor:
+  # Publish-only mirrors of the real contact states; the main loop publishes them.
+  - platform: template
+    id: oq_intuis_pv_eco_contact
+    name: "Intuis PV ECO Contact"
+    icon: mdi:electric-switch
+    entity_category: diagnostic
+
+  - platform: template
+    id: oq_intuis_pv_max_contact
+    name: "Intuis PV MAX Contact"
+    icon: mdi:electric-switch
+    entity_category: diagnostic
+
+sensor:
+  - platform: dallas_temp
+    id: oq_intuis_tank_temp
+    name: "Intuis Tank Temp"
+    icon: mdi:water-thermometer
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    update_interval: 30s
+    one_wire_id: oq_local_temp_bus
+    index: 0
+    filters:
+      - lambda: |-
+          if (isnan(x)) return x;
+          // Reject implausible readings from a loose or failing probe.
+          if (x < -10.0f || x > 100.0f) return NAN;
+          return x;
+
+text_sensor:
+  - platform: template
+    id: oq_intuis_pv_status
+    name: "Intuis PV Status"
+    icon: mdi:information-outline
+    entity_category: diagnostic
+    update_interval: never
+
+# ----------------------------
+# MAIN LOOP
+# ----------------------------
+interval:
+  - interval: 10s
+    startup_delay: 5s
+    then:
+      - lambda: |-
+          // Phase 1: read inputs.
+          const uint32_t now_ms = millis();
+          int requested = id(oq_intuis_pv_requested_mode);
+          if (requested < 0 || requested > 2) requested = 0;
+          const int applied = id(oq_intuis_pv_applied_mode);
+          const float hold_minutes = id(oq_intuis_pv_eco_min_hold_minutes).has_state()
+              ? id(oq_intuis_pv_eco_min_hold_minutes).state
+              : 60.0f;
+          const uint32_t hold_ms =
+              static_cast<uint32_t>(fmaxf(0.0f, hold_minutes) * 60000.0f);
+          // Unsigned arithmetic keeps this correct across a millis() rollover.
+          const uint32_t held_ms = now_ms - id(oq_intuis_pv_applied_since_ms);
+
+          // Phase 2: compute the target mode. Escalation is always immediate.
+          // Only a fall-back out of PV ECO is rate-limited; PV MAX is released
+          // on request so Home Assistant can own boost duration.
+          int target = applied;
+          uint32_t remaining_ms = 0;
+          if (requested > applied) {
+            target = requested;
+          } else if (requested < applied) {
+            const bool eco_hold_active = applied == 1 && held_ms < hold_ms;
+            if (eco_hold_active) {
+              remaining_ms = hold_ms - held_ms;
+            } else {
+              target = requested;
+            }
+          }
+
+          // Phase 3: apply one exclusive contact pattern.
+          if (target != applied) {
+            id(oq_intuis_pv_applied_mode) = target;
+            id(oq_intuis_pv_applied_since_ms) = now_ms;
+          }
+          if (target == 1) {
+            id(oq_intuis_pv_max_relay).turn_off();
+            id(oq_intuis_pv_eco_relay).turn_on();
+          } else if (target == 2) {
+            id(oq_intuis_pv_eco_relay).turn_off();
+            id(oq_intuis_pv_max_relay).turn_on();
+          } else {
+            id(oq_intuis_pv_eco_relay).turn_off();
+            id(oq_intuis_pv_max_relay).turn_off();
+          }
+
+          // Phase 4: publish diagnostics.
+          std::string status =
+              target == 2 ? "PV MAX active" : (target == 1 ? "PV ECO active" : "Off");
+          if (remaining_ms > 0) {
+            // Only PV ECO holds, and it can only hold back a request for Off.
+            const unsigned minutes_left =
+                static_cast<unsigned>((remaining_ms + 59999u) / 60000u);
+            char pending_text[56];
+            snprintf(pending_text, sizeof(pending_text),
+                     "; Off deferred %u min by ECO hold", minutes_left);
+            status += pending_text;
+          }
+          if (!id(oq_intuis_tank_temp).has_state() ||
+              isnan(id(oq_intuis_tank_temp).state)) {
+            status += "; tank probe missing";
+          }
+          if (!id(oq_intuis_pv_status).has_state() ||
+              id(oq_intuis_pv_status).state != status) {
+            id(oq_intuis_pv_status).publish_state(status);
+          }
+          id(oq_intuis_pv_eco_contact).publish_state(id(oq_intuis_pv_eco_relay).state);
+          id(oq_intuis_pv_max_contact).publish_state(id(oq_intuis_pv_max_relay).state);
