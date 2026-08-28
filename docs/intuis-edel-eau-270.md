@@ -47,22 +47,44 @@ is a strapping pin, and the console runs over `USB_SERIAL_JTAG` (ESPHome's
 default for this build) rather than UART0, so nothing else drives them at
 runtime.
 
-Most 2-channel relay modules switch on a **LOW** input, which is why
-`oq_intuis_relay_inverted` defaults to `"true"` in the hardware profile. If the
-relays engage on boot or behave inverted, set it to `"false"` and rebuild.
+## Relay module polarity
 
-> [!NOTE]
-> `GPIO43` is `U0TXD`. The ESP32-S3 ROM bootloader prints a short boot message on
-> it at every reset, before the firmware runs — that is hardware behaviour and no
-> firmware setting suppresses it. With active-low wiring the idle level is HIGH
-> (relay released) and the boot-log pulses last microseconds, far too short to
-> energise a mechanical relay coil. PV ECO is deliberately assigned to `GPIO43`
-> and PV MAX to `GPIO44`, which has no ROM output, so the electric back-up sits
-> on the quieter pin. This is a further reason to keep the wiring active-low.
+The module in use is a TinyTronics 5 V 2-channel relay board (SKU 003089) whose
+trigger polarity is jumper-selectable. It is wired **high-active** — jumper
+bridging `COM`–`HIGH` on both channels — so `oq_intuis_relay_inverted` is
+`"false"`: the firmware drives the pin HIGH to close a contact and LOW to
+release it.
 
-The GPIO header is 3.3 V logic while the relay module is powered from 5 V. Most
-opto-isolated modules trigger reliably from 3.3 V, but if one channel refuses to
-switch, a marginal opto input is the first thing to suspect.
+> [!CAUTION]
+> Do **not** switch this module to low-active. The vendor states that in that
+> mode the signal pin sits at about 5 V, which exceeds the ESP32-S3's 3.3 V GPIO
+> rating and can damage `GPIO43`/`GPIO44`. High-active is the only safe mode
+> here; the module accepts 3.3 V logic on its inputs.
+
+If both relays energise and stay on, `oq_intuis_relay_inverted` does not match
+the jumper setting. Check the jumpers first, then the substitution.
+
+### Boot behaviour
+
+`GPIO43` is `U0TXD`. The ESP32-S3 ROM bootloader drives it HIGH and prints a boot
+message on it at every reset, before the firmware runs. That is hardware
+behaviour and no firmware setting suppresses it. In high-active mode this means
+**PV ECO briefly closes for well under a second at each reset** — long enough for
+the coil to pull in, far too short for the boiler to act on given it expects
+activation times measured in hours.
+
+`GPIO44` is only weakly pulled up internally (about 45 kΩ), so it can be held
+down externally. Fit a **10 kΩ resistor from `IN2` to `GND`** and PV MAX stays
+released through the entire boot, which is the channel worth protecting since it
+enables the electric back-up. The same resistor on `IN1` will not overcome the
+ROM actively driving `GPIO43`.
+
+If you want both channels fully silent at boot, the options are an inverting
+transistor stage per channel (then set `oq_intuis_relay_inverted` back to
+`"true"`) or moving to an on-board relay. Neither is needed for normal use.
+
+Each energised relay draws about 70 mA from the board's 5 V rail. Only one is
+ever energised by design, so the steady-state load stays modest.
 
 ## Boiler-side settings
 
@@ -133,7 +155,9 @@ wiring order, so adding a probe can silently swap which one is read.
    through `PV ECO` and `PV MAX` and confirm the two diagnostic contact sensors
    follow, and that only ever one is on.
 3. Verify relay polarity: no channel should be engaged while the mode is `Off`.
-   Also reset the board and confirm neither relay latches during boot.
+   Reset the board and confirm nothing latches — a brief click on channel 1
+   during boot is the ROM output on `GPIO43` and is expected; channel 2 should
+   stay silent if the 10 kΩ pull-down is fitted.
 4. Connect the relay outputs to the boiler's PV connectors 1 and 2.
 5. Select `PV MAX` and confirm the boiler's display shows photovoltaic mode
    active and raises its target temperature.

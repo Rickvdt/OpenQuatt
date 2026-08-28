@@ -53,7 +53,7 @@ substitutions:
   controller_aux_relay_pin: "GPIO3"                     # Relay 2 output reserved for controller logic.
   oq_intuis_pv_eco_pin: "GPIO43"                        # Intuis PV ECO contact; header pin, also U0TXD.
   oq_intuis_pv_max_pin: "GPIO44"                        # Intuis PV MAX contact; header pin, no ROM boot output.
-  oq_intuis_relay_inverted: "true"                      # Opto-isolated relay modules usually switch on a LOW input.
+  oq_intuis_relay_inverted: "false"                     # Relay module jumpered HIGH-active (COM-HIGH bridged).
   web_auth_recovery_pin: "GPIO46"                       # Boot switch / recovery input.
   eth_mosi_pin: "GPIO10"                                # W5500 SPI MOSI.
   eth_miso_pin: "GPIO11"                                # W5500 SPI MISO.
