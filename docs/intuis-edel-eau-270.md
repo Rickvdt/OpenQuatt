@@ -165,6 +165,33 @@ wiring order, so adding a probe can silently swap which one is read.
    countdown in `Intuis PV Status` and keep contact 1 closed; from `PV MAX`,
    selecting `Off` should open both contacts on the next loop pass.
 
+## Update channels
+
+The four `configs/heatpump_controller_q/*.yaml` files in this fork split the two
+update channels by source:
+
+| Channel | Manifest source | Contains Intuis support |
+|---|---|---|
+| `main` | `OpenQuatt/OpenQuatt` official releases | **No** — installing it removes this feature |
+| `dev` | `Rickvdt/OpenQuatt` `dev-latest` | Yes — builds from the `personal` branch |
+
+So the built-in updater becomes the normal deployment path: commit to `personal`,
+run Dev Build, then install from the web app's update panel.
+
+> [!IMPORTANT]
+> After flashing, set **Firmware Update Channel** to `dev` in the web app.
+> That select uses `restore_value: true`, so a device that was previously on
+> `main` stays on `main` even after flashing a dev build — and on `main` it will
+> offer official firmware that overwrites the Intuis support.
+
+Only the Heatpump Controller Q configs were repointed. The `waveshare` and
+`heatpump_listener` configs still reference upstream on both channels, since that
+is not the hardware this fork runs.
+
+Note that upstream's dev counter runs far ahead of this fork's (`dev.714` versus
+`dev.1` at the time of writing), which is another reason not to leave the channel
+pointing at upstream dev.
+
 ## Building firmware
 
 Compilation runs in CI on this fork: **Actions → Dev Build → Run workflow →
