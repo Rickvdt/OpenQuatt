@@ -17,14 +17,13 @@
 #   - Expose one PV mode selector (Off / PV ECO / PV MAX) as the single control
 #   - Drive two volt-free contacts through an external 2-channel relay module
 #   - Keep both contacts mutually exclusive at all times
-#   - Enforce a configurable minimum hold time on PV ECO only, because the
-#     boiler manual asks for a minimum activation time
 #   - Publish the actual contact states and a short status/reason for diagnostics
 #
 # What this package DOES NOT do:
 #   - Does not read or write any Quatt control state, Control Mode or strategy
 #   - Does not decide when solar surplus exists; Home Assistant owns that
-#   - Does not time-limit PV MAX; Home Assistant owns boost duration
+#   - Does not time or rate-limit anything; Home Assistant owns every
+#     schedule, minimum run time and anti-cycling decision
 #   - Does not set the boiler's PV target temperatures; those live in the
 #     boiler's own installer menu
 #   - Does not touch R1, R2, OpenTherm or the PT1000 supply path
@@ -36,8 +35,8 @@
 #     boiler ignores both contacts.
 #   - Contact 1 = PV ECO (heat pump only), contact 2 = PV MAX (heat pump plus
 #     electric back-up). Both are volt-free and must never see 230 V.
-#   - The relay module is opto-isolated and active-low by default; polarity is
-#     set through `oq_intuis_relay_inverted` in the hardware profile.
+#   - Relay polarity is set through `oq_intuis_relay_inverted` in the hardware
+#     profile. The fitted module is jumpered HIGH-active, so it is "false".
 #
 # Safety / fail-safe:
 #   - Both outputs restore OFF on boot and stay OFF until the control loop runs
@@ -46,9 +45,8 @@
 #   - Asserting both contacts at once is structurally impossible; the loop
 #     writes one exclusive pattern per mode
 #   - An unknown or invalid mode resolves to Off
-#   - Escalating to a higher mode is always immediate
-#   - Leaving PV ECO downwards is rate-limited; leaving PV MAX is immediate,
-#     so a Home Assistant boost can be cancelled at any time
+#   - Mode changes apply on the next loop pass in both directions, so Home
+#     Assistant can always take a mode away immediately
 #
 # ==============================================================================
 
@@ -60,18 +58,6 @@ globals:
   # 0 = Off, 1 = PV ECO, 2 = PV MAX.
   - id: oq_intuis_pv_requested_mode
     type: int
-    restore_value: false
-    initial_value: "0"
-
-  # Applied mode; written only by the main loop, which owns both outputs.
-  - id: oq_intuis_pv_applied_mode
-    type: int
-    restore_value: false
-    initial_value: "0"
-
-  # Millis timestamp of the last applied-mode change; drives the hold timer.
-  - id: oq_intuis_pv_applied_since_ms
-    type: uint32_t
     restore_value: false
     initial_value: "0"
 
@@ -129,23 +115,6 @@ select:
           // The loop owns the outputs; only record the request here.
           id(oq_intuis_pv_requested_mode) = static_cast<int>(i);
 
-number:
-  - platform: template
-    id: oq_intuis_pv_eco_min_hold_minutes
-    name: "Intuis PV ECO Minimum Hold"
-    icon: mdi:timer-lock-outline
-    unit_of_measurement: "min"
-    min_value: 0
-    max_value: 240
-    step: 5
-    mode: box
-    optimistic: true
-    restore_value: true
-    # The boiler manual recommends at least one hour of PV activation.
-    # Applies to PV ECO only; PV MAX boost timing belongs to Home Assistant.
-    initial_value: 60
-    entity_category: config
-
 # ----------------------------
 # PUBLISHED ENTITIES
 # ----------------------------
@@ -198,44 +167,16 @@ interval:
     startup_delay: 5s
     then:
       - lambda: |-
-          // Phase 1: read inputs.
-          const uint32_t now_ms = millis();
-          int requested = id(oq_intuis_pv_requested_mode);
-          if (requested < 0 || requested > 2) requested = 0;
-          const int applied = id(oq_intuis_pv_applied_mode);
-          const float hold_minutes = id(oq_intuis_pv_eco_min_hold_minutes).has_state()
-              ? id(oq_intuis_pv_eco_min_hold_minutes).state
-              : 60.0f;
-          const uint32_t hold_ms =
-              static_cast<uint32_t>(fmaxf(0.0f, hold_minutes) * 60000.0f);
-          // Unsigned arithmetic keeps this correct across a millis() rollover.
-          const uint32_t held_ms = now_ms - id(oq_intuis_pv_applied_since_ms);
+          // Phase 1: read the requested mode. Home Assistant owns all timing;
+          // this loop only applies what was asked for, exclusively.
+          int mode = id(oq_intuis_pv_requested_mode);
+          if (mode < 0 || mode > 2) mode = 0;
 
-          // Phase 2: compute the target mode. Escalation is always immediate.
-          // Only a fall-back out of PV ECO is rate-limited; PV MAX is released
-          // on request so Home Assistant can own boost duration.
-          int target = applied;
-          uint32_t remaining_ms = 0;
-          if (requested > applied) {
-            target = requested;
-          } else if (requested < applied) {
-            const bool eco_hold_active = applied == 1 && held_ms < hold_ms;
-            if (eco_hold_active) {
-              remaining_ms = hold_ms - held_ms;
-            } else {
-              target = requested;
-            }
-          }
-
-          // Phase 3: apply one exclusive contact pattern.
-          if (target != applied) {
-            id(oq_intuis_pv_applied_mode) = target;
-            id(oq_intuis_pv_applied_since_ms) = now_ms;
-          }
-          if (target == 1) {
+          // Phase 2: apply one exclusive contact pattern.
+          if (mode == 1) {
             id(oq_intuis_pv_max_relay).turn_off();
             id(oq_intuis_pv_eco_relay).turn_on();
-          } else if (target == 2) {
+          } else if (mode == 2) {
             id(oq_intuis_pv_eco_relay).turn_off();
             id(oq_intuis_pv_max_relay).turn_on();
           } else {
@@ -243,18 +184,9 @@ interval:
             id(oq_intuis_pv_max_relay).turn_off();
           }
 
-          // Phase 4: publish diagnostics.
+          // Phase 3: publish diagnostics.
           std::string status =
-              target == 2 ? "PV MAX active" : (target == 1 ? "PV ECO active" : "Off");
-          if (remaining_ms > 0) {
-            // Only PV ECO holds, and it can only hold back a request for Off.
-            const unsigned minutes_left =
-                static_cast<unsigned>((remaining_ms + 59999u) / 60000u);
-            char pending_text[56];
-            snprintf(pending_text, sizeof(pending_text),
-                     "; Off deferred %u min by ECO hold", minutes_left);
-            status += pending_text;
-          }
+              mode == 2 ? "PV MAX active" : (mode == 1 ? "PV ECO active" : "Off");
           if (!id(oq_intuis_tank_temp).has_state() ||
               isnan(id(oq_intuis_tank_temp).state)) {
             status += "; tank probe missing";

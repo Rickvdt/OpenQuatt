@@ -101,31 +101,24 @@ The contacts do nothing until PV mode is enabled on the boiler itself:
 |---|---|---|
 | `Intuis PV Mode` | select | The control: `Off` / `PV ECO` / `PV MAX` |
 | `Intuis Tank Temp` | sensor | DS18B20 tank temperature, 30 s interval |
-| `Intuis PV ECO Minimum Hold` | number (config) | Minimum minutes PV ECO stays on before it can be released; default 60. Does not apply to PV MAX. |
 | `Intuis PV ECO Contact` | binary sensor (diagnostic) | Actual state of relay channel 1 |
 | `Intuis PV MAX Contact` | binary sensor (diagnostic) | Actual state of relay channel 2 |
-| `Intuis PV Status` | text sensor (diagnostic) | Active mode, pending hold, probe faults |
+| `Intuis PV Status` | text sensor (diagnostic) | Active mode and probe faults |
 
 All of them reach Home Assistant through the standard ESPHome native API; no
 extra configuration is needed on the Home Assistant side.
 
 ## Behaviour
 
-- **Escalation is immediate.** `Off → PV ECO` or `PV ECO → PV MAX` applies on the
-  next loop pass, so the boiler can react to rising production without delay.
-- **PV ECO is rate-limited on the way down.** Leaving PV ECO waits until it has
-  been active for `Intuis PV ECO Minimum Hold` minutes. The boiler manual
-  recommends at least one hour of PV activation, and this keeps passing clouds
-  from short-cycling the compressor. The pending request is remembered and
-  applied as soon as the hold expires; `Intuis PV Status` shows the countdown.
-- **PV MAX is released immediately.** No firmware hold applies to it, so Home
-  Assistant owns boost duration (15 min, 30 min, until-target, whatever you
-  automate) and can cancel at any moment. This is deliberate: electric back-up
-  heating should never be locked on by the firmware.
-- One consequence worth knowing: because escalation is free and PV MAX has no
-  hold, `PV ECO → PV MAX → Off` bypasses a running ECO hold. That is fine for a
-  deliberate boost-then-stop sequence, but avoid using PV MAX as a way to shortcut
-  the ECO hold.
+- **Mode changes apply on the next loop pass, in both directions.** The firmware
+  imposes no hold or rate limit of any kind, so Home Assistant can assert or
+  withdraw a mode at any moment.
+- **All timing lives in Home Assistant.** Scheduling, minimum run length,
+  anti-cycling hysteresis and boost duration are decided there, not here. The
+  firmware only guarantees that the requested mode is applied exclusively.
+  Earlier revisions carried a configurable PV ECO minimum-hold timer; it was
+  removed because it could defer a Home Assistant `Off` and overrun a planned
+  window, and the scheduler now owns that concern.
 - **PV mode does not survive a reboot.** The selector deliberately does not
   restore, so a power cut can never resume electric back-up heating unattended.
   Both relays restore OFF and stay OFF until the control loop runs.
