@@ -99,6 +99,20 @@ globals:
     restore_value: false
     initial_value: 'false'
 
+  # When continuous adequate flow began. The loop temperature sensor sits on the
+  # outdoor unit and reads stagnant water near ambient until flow has flushed
+  # it, so a reading is only trustworthy once this has aged past the settle time.
+  - id: oq_ph_loop_guard_flow_ok_since_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: '0'
+
+  # Suppresses re-engagement after a settled reading showed the loop was fine.
+  - id: oq_ph_loop_guard_lockout_until_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: '0'
+
 select:
   - platform: template
     id: oq_ph_response_profile
@@ -289,6 +303,32 @@ number:
     initial_value: 21
     entity_category: config
 
+  - platform: template
+    id: ph_loop_guard_flow_settle_s
+    name: "Loop guard flow settle"
+    icon: mdi:timer-sand
+    unit_of_measurement: "s"
+    min_value: 30
+    max_value: 600
+    step: 10
+    restore_value: true
+    optimistic: true
+    initial_value: 120
+    entity_category: config
+
+  - platform: template
+    id: ph_loop_guard_recheck_min
+    name: "Loop guard recheck"
+    icon: mdi:timer-lock-outline
+    unit_of_measurement: "min"
+    min_value: 0
+    max_value: 120
+    step: 5
+    restore_value: true
+    optimistic: true
+    initial_value: 30
+    entity_category: config
+
 switch:
   # Master enable for the loop guard. Defaults off so flashing this firmware
   # cannot change heating behaviour until the guard is deliberately switched on.
@@ -310,6 +350,16 @@ binary_sensor:
       return id(oq_ph_loop_guard_active);
 
 text_sensor:
+  # Explains what the loop guard is doing, which is otherwise opaque: an idle
+  # guard may be disabled, waiting on PV mode, still flushing the sensor, or
+  # locked out after a settled reading showed the loop was already fine.
+  - platform: template
+    id: oq_ph_loop_guard_status
+    name: "Loop guard status"
+    icon: mdi:heat-wave
+    entity_category: diagnostic
+    update_interval: never
+
   # DEBUG-RUNTIME START: Duo Power House request reason
   - platform: template
     id: oq_duo_optimizer_reason
@@ -582,6 +632,34 @@ interval:
               (id(oq_water_temp_limit_factor) > 0.0f) &&
               !id(oq_water_temp_hard_trip_active) &&
               !id(oq_lowflow_fault_active);
+          // The heat pumps stand outdoors, so with the circulation pump stopped
+          // hp1_water_in_temp measures stagnant water near outdoor ambient, not
+          // the floor loop. Measured 2026-09-01: 16.27 C with no flow against a
+          // true loop of 21.52 C once flow settled — a 5.2 C error that tracks
+          // ambient. In winter that reading sits far below any sensible engage
+          // threshold with a perfectly warm floor.
+          //
+          // Flow alone fixes it: the reading reached its plateau about 57 s
+          // after flow started at ~800 L/h. So track continuous adequate flow
+          // and only trust the reading once it has settled.
+          const float flow_lph = id(flow_rate_selected).has_state()
+                                     ? id(flow_rate_selected).state
+                                     : NAN;
+          const bool loop_flow_ok = !isnan(flow_lph) && (flow_lph >= ${oq_cm_min_flow_lph}f);
+          if (!loop_flow_ok) {
+            id(oq_ph_loop_guard_flow_ok_since_ms) = 0;
+          } else if (id(oq_ph_loop_guard_flow_ok_since_ms) == 0) {
+            id(oq_ph_loop_guard_flow_ok_since_ms) = now_ms;
+          }
+          const uint32_t loop_settle_ms =
+              (uint32_t) (id(ph_loop_guard_flow_settle_s).state * 1000.0f);
+          const bool loop_reading_valid =
+              loop_flow_ok &&
+              (now_ms - id(oq_ph_loop_guard_flow_ok_since_ms)) >= loop_settle_ms;
+          // Signed difference so the comparison survives the millis() wrap.
+          const bool loop_guard_locked_out =
+              (int32_t) (now_ms - id(oq_ph_loop_guard_lockout_until_ms)) < 0;
+
           if (!loop_guard_permitted) {
             id(oq_ph_loop_guard_active) = false;
           } else {
@@ -589,14 +667,60 @@ interval:
             // Keep the release threshold above the engage threshold whatever
             // the user typed, so the pair can never collapse into chatter.
             const float guard_off_c = std::max(id(ph_loop_guard_off_c).state, guard_on_c + 0.5f);
-            if (!id(oq_ph_loop_guard_active) && T_loop < guard_on_c) {
-              id(oq_ph_loop_guard_active) = true;
-            } else if (id(oq_ph_loop_guard_active) && T_loop > guard_off_c) {
+            if (!id(oq_ph_loop_guard_active)) {
+              // Engage on the stopped-flow reading, but treat it only as "worth
+              // checking". It cannot be trusted as a decision, so the release
+              // test below re-examines it once flow has settled.
+              if (!loop_guard_locked_out && T_loop < guard_on_c) {
+                id(oq_ph_loop_guard_active) = true;
+              }
+            } else if (loop_reading_valid && T_loop > guard_off_c) {
+              // Only a settled-flow reading may stop the guard. Without this
+              // gate the flush that follows engagement would itself look like
+              // success and release the guard within a minute.
               id(oq_ph_loop_guard_active) = false;
+              // The stagnant reading will fall back below the engage threshold
+              // within minutes, so hold off re-checking. Otherwise the guard
+              // would restart on every loop pass for as long as PV mode runs.
+              const uint32_t recheck_ms =
+                  (uint32_t) (id(ph_loop_guard_recheck_min).state * 60000.0f);
+              id(oq_ph_loop_guard_lockout_until_ms) = now_ms + recheck_ms;
             }
           }
           if (id(oq_ph_loop_guard_active) && id(oq_demand_raw) < 1) {
             id(oq_demand_raw) = 1;
+          }
+
+          {
+            char guard_buf[96];
+            if (!id(ph_loop_guard_enable).state) {
+              snprintf(guard_buf, sizeof(guard_buf), "Disabled");
+            } else if (!id(oq_ph_loop_guard_request)) {
+              snprintf(guard_buf, sizeof(guard_buf), "Idle - no heat draw on the loop");
+            } else if (!loop_guard_permitted) {
+              snprintf(guard_buf, sizeof(guard_buf), "Blocked by a protection or a missing reading");
+            } else if (id(oq_ph_loop_guard_active)) {
+              if (loop_reading_valid) {
+                snprintf(guard_buf, sizeof(guard_buf), "Active - loop %.1f C", T_loop);
+              } else {
+                const uint32_t waited_s =
+                    loop_flow_ok ? ((now_ms - id(oq_ph_loop_guard_flow_ok_since_ms)) / 1000UL) : 0UL;
+                snprintf(guard_buf, sizeof(guard_buf), "Active - flushing sensor %lu/%lu s",
+                         (unsigned long) waited_s,
+                         (unsigned long) (loop_settle_ms / 1000UL));
+              }
+            } else if (loop_guard_locked_out) {
+              snprintf(guard_buf, sizeof(guard_buf), "Loop was warm - rechecking in %lu min",
+                       (unsigned long) ((uint32_t) (id(oq_ph_loop_guard_lockout_until_ms) - now_ms) / 60000UL + 1UL));
+            } else {
+              snprintf(guard_buf, sizeof(guard_buf), "Armed - loop %.1f C, engage below %.1f C",
+                       T_loop, id(ph_loop_guard_on_c).state);
+            }
+            const std::string guard_s(guard_buf);
+            if (!id(oq_ph_loop_guard_status).has_state() ||
+                id(oq_ph_loop_guard_status).state != guard_s) {
+              id(oq_ph_loop_guard_status).publish_state(guard_s);
+            }
           }
 
           int raw = id(oq_demand_raw);
