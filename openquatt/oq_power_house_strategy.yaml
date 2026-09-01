@@ -113,6 +113,14 @@ globals:
     restore_value: false
     initial_value: '0'
 
+  # True only when the guard, not the house model, is what raised the power
+  # request. That distinction is what keeps real heat demand in charge: when the
+  # house asks for more than the guard needs, the guard touches nothing at all.
+  - id: oq_ph_loop_guard_owns_request
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
 select:
   - platform: template
     id: oq_ph_response_profile
@@ -474,6 +482,7 @@ interval:
             id(oq_ph_request_owner_hp) = 0;
             id(oq_ph_request_reason_code) = 0;
             id(oq_ph_loop_guard_active) = false;
+            id(oq_ph_loop_guard_owns_request) = false;
             id(oq_phouse_last_ms) = 0;
             id(oq_phouse_last_w) = 0.0f;
             id(oq_phouse_comfort_memory_c) = 0.0f;
@@ -642,8 +651,14 @@ interval:
           // Flow alone fixes it: the reading reached its plateau about 57 s
           // after flow started at ~800 L/h. So track continuous adequate flow
           // and only trust the reading once it has settled.
-          const float flow_lph = id(flow_rate_selected).has_state()
-                                     ? id(flow_rate_selected).state
+          // Use HP1's own flow meter, not flow_rate_selected. The selected/
+          // averaged source reads 0 while the Quatt's pump is idle even when
+          // water is genuinely moving through HP1 (measured 2026-09-01: hp1_flow
+          // 289 L/h against flow_rate_selected 0.0), which would keep the settle
+          // gate below shut forever. What matters here is only whether water is
+          // moving past the HP1 temperature probe.
+          const float flow_lph = id(hp1_flow).has_state()
+                                     ? id(hp1_flow).state
                                      : NAN;
           const bool loop_flow_ok = !isnan(flow_lph) && (flow_lph >= ${oq_cm_min_flow_lph}f);
           if (!loop_flow_ok) {
@@ -687,8 +702,49 @@ interval:
               id(oq_ph_loop_guard_lockout_until_ms) = now_ms + recheck_ms;
             }
           }
-          if (id(oq_ph_loop_guard_active) && id(oq_demand_raw) < 1) {
-            id(oq_demand_raw) = 1;
+          // ----------------------------------------------------------------
+          // Raising oq_demand_raw alone is not enough to start a heat pump.
+          // Supervisory gates Power House on a low-load latch that compares
+          // oq_strategy_requested_power_w against the perf-map level-1 thermal
+          // output (oq_supervisory_controlmode.yaml, "Power House low-load
+          // hysteresis"): ask for less than one compressor step and it rightly
+          // refuses, because running level 1 would only cycle. And the request
+          // is itself capped further down by rated_power * f / demand_max, so
+          // demand and requested power have to rise together.
+          //
+          // So ask for what the guard actually intends to run: one heat pump at
+          // level 1, plus enough margin to clear the latch's on threshold.
+          // ----------------------------------------------------------------
+          id(oq_ph_loop_guard_owns_request) = false;
+          if (id(oq_ph_loop_guard_active)) {
+            const float guard_tsup = id(oq_system_supply_temp).state;
+            float guard_p_w = NAN;
+            if (!isnan(Tout) && !isnan(guard_tsup)) {
+              guard_p_w = oq_perf::interp_power_th_w(1, Tout, guard_tsup);
+            }
+            if (isnan(guard_p_w) || guard_p_w <= 0.0f) guard_p_w = 1800.0f;
+            // The latch arms at on_factor * P_level1 (on_factor <= 1.10) but no
+            // lower than off_w + min_hysteresis (<= 0.90 * P_level1 + 400 W), so
+            // clear both forms. on_w is hard-capped at 2200 W, so this always
+            // suffices.
+            guard_p_w = std::max(guard_p_w * 1.20f, guard_p_w + 450.0f);
+
+            const float model_w = id(oq_phouse_req_w);
+            if (isnan(model_w) || model_w < guard_p_w) {
+              // The house on its own would not have justified heating, so the
+              // guard owns this request and may pin the level below.
+              id(oq_phouse_req_w) = guard_p_w;
+              id(oq_ph_loop_guard_owns_request) = true;
+            }
+
+            int guard_demand = 1;
+            if (!isnan(house_power_rating_w) && house_power_rating_w > 0.0f) {
+              guard_demand = (int) ceilf(${oq_strategy_demand_max_f} * (guard_p_w / house_power_rating_w));
+              if (guard_demand < 1) guard_demand = 1;
+            }
+            if (id(oq_demand_raw) < guard_demand) {
+              id(oq_demand_raw) = clamp_demand(guard_demand);
+            }
           }
 
           {
@@ -700,11 +756,14 @@ interval:
             } else if (!loop_guard_permitted) {
               snprintf(guard_buf, sizeof(guard_buf), "Blocked by a protection or a missing reading");
             } else if (id(oq_ph_loop_guard_active)) {
+              const float asking_w = id(oq_phouse_req_w);
               if (loop_reading_valid) {
-                snprintf(guard_buf, sizeof(guard_buf), "Active - loop %.1f C", T_loop);
+                snprintf(guard_buf, sizeof(guard_buf), "Active - loop %.1f C, asking %.0f W", T_loop, asking_w);
+              } else if (!loop_flow_ok) {
+                snprintf(guard_buf, sizeof(guard_buf), "Active - waiting for flow, asking %.0f W", asking_w);
               } else {
                 const uint32_t waited_s =
-                    loop_flow_ok ? ((now_ms - id(oq_ph_loop_guard_flow_ok_since_ms)) / 1000UL) : 0UL;
+                    (now_ms - id(oq_ph_loop_guard_flow_ok_since_ms)) / 1000UL;
                 snprintf(guard_buf, sizeof(guard_buf), "Active - flushing sensor %lu/%lu s",
                          (unsigned long) waited_s,
                          (unsigned long) (loop_settle_ms / 1000UL));
@@ -1380,11 +1439,17 @@ interval:
             publish_optimizer_reason("keep_current");
           }
 
-          // Loop guard supplies a level only when the normal strategy wants
-          // none at all. Real heat demand always wins: the moment the
-          // optimizer returns any non-zero level this is skipped entirely, so
-          // the guard can never cap a duo run or override the chosen owner.
-          if (id(oq_ph_loop_guard_active) && hp1_req == 0 && hp2_req == 0 && hp1_available) {
+          // Pin one heat pump at level 1, but only when the guard is what
+          // raised the power request in the first place. Real heat demand
+          // always wins: if the house asked for more than the guard needs,
+          // oq_ph_loop_guard_owns_request is false and none of this runs, so a
+          // duo run is never capped and the chosen owner is never overridden.
+          //
+          // The pin is deliberate rather than left to the optimizer. Because
+          // the guard inflates P_target to clear the supervisor's low-load
+          // latch, the optimizer would sometimes read that margin as a request
+          // for level 2 and over-supply the loop further.
+          if (id(oq_ph_loop_guard_owns_request) && hp1_available) {
             hp1_req = 1;
             hp2_req = 0;
             request_owner_hp = 1;
