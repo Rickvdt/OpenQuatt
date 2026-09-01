@@ -39,7 +39,7 @@ The board (V1.1) carries two 4-pin expansion headers next to the ESP32-S3:
 | `GND` (GPIO header) | `GND` | — |
 | `GPIO43` (GPIO header) | `IN1` | ch1 `COM` + `NO` → PV connector **1** (PV ECO) |
 | `GPIO44` (GPIO header) | `IN2` | ch2 `COM` + `NO` → PV connector **2** (PV MAX) |
-| `T`: `+3.3V` / `GND` / `DATA` | — | DS18B20 strapped to the tank |
+| `T`: `+3.3V` / `GND` / `DATA` | — | DS18B20 **inside** the tank, next to the boiler's own sensor |
 
 `GPIO43` and `GPIO44` are the only free GPIOs brought out to a header. Other
 ESP32-S3 pins are electrically unused but not accessible on this board. Neither
@@ -122,6 +122,20 @@ extra configuration is needed on the Home Assistant side.
 - **PV mode does not survive a reboot.** The selector deliberately does not
   restore, so a power cut can never resume electric back-up heating unattended.
   Both relays restore OFF and stay OFF until the control loop runs.
+
+## Reading the tank sensor
+
+The probe sits inside the tank beside the boiler's own sensor, so there is no
+strap-on lag — but it is near the condenser. **While the compressor runs it reads
+roughly 3 °C high**, settling back over about 10–12 minutes after it stops
+(measured: −3.6 °C and −3.1 °C on two stops). Stopping at 55 °C indicated
+therefore stores about 52 °C.
+
+It is also **mid-height**, so a single shower barely moves it: cold water enters
+at the bottom and the stratification is stable. The reading holds steady and then
+drops sharply once the thermocline passes the probe — observed once as 46 → 32 °C
+within an hour. Consequence: stored energy is over-estimated straight after a
+draw. See `intuis-ha-control-logic.md` for how the planner copes.
 
 ## Interaction with the local supply-temperature path — read this
 
