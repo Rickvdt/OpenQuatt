@@ -75,11 +75,29 @@ globals:
   # 4=fallback_duo, 5=keep_current, 6=hold_active, 7=defrost_hold,
   # 8=better_heat, 9=soft_guard, 10=less_power, 11=no_candidate,
   # 12=defrost_boost, 13=runtime_lead, 14=single_topology,
-  # 15=oil_return_hold
+  # 15=oil_return_hold, 20=loop_guard
   - id: oq_ph_request_reason_code
     type: int
     restore_value: false
     initial_value: '0'
+
+  # Loop guard request, raised by an appliance that extracts heat from the
+  # heating loop while the house itself needs none — a water-source DHW heat
+  # pump, for instance. The flag lives here so this strategy never depends on
+  # an optional hardware package: with no such appliance fitted nothing writes
+  # it and the guard can never engage. oq_intuis_dhw.yaml is the only writer
+  # today, and only the Heatpump Controller Q profile includes it.
+  - id: oq_ph_loop_guard_request
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+  # Latched guard state, so on_c/off_c act as hysteresis rather than a single
+  # threshold the loop temperature can chatter across.
+  - id: oq_ph_loop_guard_active
+    type: bool
+    restore_value: false
+    initial_value: 'false'
 
 select:
   - platform: template
@@ -245,6 +263,52 @@ number:
     optimistic: true
     initial_value: 1
 
+  - platform: template
+    id: ph_loop_guard_on_c
+    name: "Loop guard engage temp"
+    icon: mdi:thermometer-chevron-down
+    unit_of_measurement: "°C"
+    min_value: 10
+    max_value: 30
+    step: 0.5
+    restore_value: true
+    optimistic: true
+    initial_value: 19
+    entity_category: config
+
+  - platform: template
+    id: ph_loop_guard_off_c
+    name: "Loop guard release temp"
+    icon: mdi:thermometer-chevron-up
+    unit_of_measurement: "°C"
+    min_value: 10
+    max_value: 35
+    step: 0.5
+    restore_value: true
+    optimistic: true
+    initial_value: 21
+    entity_category: config
+
+switch:
+  # Master enable for the loop guard. Defaults off so flashing this firmware
+  # cannot change heating behaviour until the guard is deliberately switched on.
+  - platform: template
+    id: ph_loop_guard_enable
+    name: "Loop guard enable"
+    icon: mdi:snowflake-alert
+    restore_mode: RESTORE_DEFAULT_OFF
+    optimistic: true
+    entity_category: config
+
+binary_sensor:
+  - platform: template
+    id: ph_loop_guard_active_state
+    name: "Loop guard active"
+    icon: mdi:heat-wave
+    entity_category: diagnostic
+    lambda: |-
+      return id(oq_ph_loop_guard_active);
+
 text_sensor:
   # DEBUG-RUNTIME START: Duo Power House request reason
   - platform: template
@@ -359,6 +423,7 @@ interval:
             id(oq_ph_request_hp2_level) = 0;
             id(oq_ph_request_owner_hp) = 0;
             id(oq_ph_request_reason_code) = 0;
+            id(oq_ph_loop_guard_active) = false;
             id(oq_phouse_last_ms) = 0;
             id(oq_phouse_last_w) = 0.0f;
             id(oq_phouse_comfort_memory_c) = 0.0f;
@@ -491,6 +556,47 @@ interval:
             id(oq_phouse_last_w) = P_effective;
             id(oq_phouse_last_ms) = now_ms;
             id(oq_demand_raw) = clamp_demand((int) lroundf(${oq_strategy_demand_max_f} * (P_effective / house_power_rating_w)));
+          }
+
+          // ----------------------------------------------------------------
+          // Loop guard: keep the heating loop from being chilled by an
+          // appliance that draws heat out of it while the house needs none.
+          // Reaching here already means the strategy is active and not
+          // cooling, since CM5 and non-heating modes returned above.
+          //
+          // The guard only ever raises demand. Real house demand is larger and
+          // dominates, so the floor is inert whenever the house calls for heat.
+          // ----------------------------------------------------------------
+          const float T_loop = id(hp1_water_in_temp).has_state()
+                                   ? id(hp1_water_in_temp).state
+                                   : NAN;
+          // Defer to the firmware's own protections instead of overriding them.
+          // The demand floor below sidesteps the water-temperature limiter that
+          // scales P_effective, and the strategy path has no other stop of its
+          // own, so a hard trip or a low-flow fault has to release the guard
+          // outright rather than merely reduce it.
+          const bool loop_guard_permitted =
+              id(ph_loop_guard_enable).state &&
+              id(oq_ph_loop_guard_request) &&
+              !isnan(T_loop) &&
+              (id(oq_water_temp_limit_factor) > 0.0f) &&
+              !id(oq_water_temp_hard_trip_active) &&
+              !id(oq_lowflow_fault_active);
+          if (!loop_guard_permitted) {
+            id(oq_ph_loop_guard_active) = false;
+          } else {
+            const float guard_on_c = id(ph_loop_guard_on_c).state;
+            // Keep the release threshold above the engage threshold whatever
+            // the user typed, so the pair can never collapse into chatter.
+            const float guard_off_c = std::max(id(ph_loop_guard_off_c).state, guard_on_c + 0.5f);
+            if (!id(oq_ph_loop_guard_active) && T_loop < guard_on_c) {
+              id(oq_ph_loop_guard_active) = true;
+            } else if (id(oq_ph_loop_guard_active) && T_loop > guard_off_c) {
+              id(oq_ph_loop_guard_active) = false;
+            }
+          }
+          if (id(oq_ph_loop_guard_active) && id(oq_demand_raw) < 1) {
+            id(oq_demand_raw) = 1;
           }
 
           int raw = id(oq_demand_raw);
@@ -1148,6 +1254,17 @@ interval:
             request_owner_hp = suspect_topology_hold.owner_hp;
             request_reason_code = 5;
             publish_optimizer_reason("keep_current");
+          }
+
+          // Loop guard supplies a level only when the normal strategy wants
+          // none at all. Real heat demand always wins: the moment the
+          // optimizer returns any non-zero level this is skipped entirely, so
+          // the guard can never cap a duo run or override the chosen owner.
+          if (id(oq_ph_loop_guard_active) && hp1_req == 0 && hp2_req == 0 && hp1_available) {
+            hp1_req = 1;
+            hp2_req = 0;
+            request_owner_hp = 1;
+            request_reason_code = 20;
           }
 
           id(oq_ph_request_hp1_level) = hp1_req;

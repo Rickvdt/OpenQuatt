@@ -1258,6 +1258,7 @@ interval:
               case 11: request_reason = "no_candidate"; break;
               case 12: request_reason = "defrost_boost"; break;
               case 13: request_reason = "runtime_lead"; break;
+              case 20: request_reason = "ph_loop_guard"; break;
               default: request_reason = "ph_idle"; break;
             }
           }
@@ -1287,6 +1288,7 @@ interval:
               case 1: request_reason = "ph_fallback_idle"; break;
               case 2: request_reason = "ph_fallback_single_hp1"; break;
               case 14: request_reason = "ph_single_topology"; break;
+              case 20: request_reason = "ph_loop_guard"; break;
               default: request_reason = "ph_idle"; break;
             }
           }

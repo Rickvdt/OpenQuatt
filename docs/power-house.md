@@ -163,6 +163,28 @@ Wil je warmte in de tijd verschuiven, bijvoorbeeld voorverwarmen bij veel zon, d
 
 Kijk bij twijfel naar `Power House – demand source`. Die staat op `external` zolang de externe vraag echt gebruikt wordt, en op `model` zodra `Power House` op het eigen huismodel terugvalt.
 
+## Lusbeveiliging (optioneel, fork)
+
+Heb je een warmtepompboiler die zijn warmte uit de vloerverwarmingslus haalt in plaats van uit de buitenlucht, dan koelt die lus af terwijl het huis zelf geen warmte nodig heeft. In het najaar staat de kamer vaak nog boven het setpoint, dus `Power House` vraagt niets aan en niemand vult de lus bij. De vloer zakt dan langzaam weg naar de aanzuigtemperatuur van de boiler.
+
+De lusbeveiliging houdt dat tegen door één warmtepomp op compressorniveau 1 te laten meelopen. Precies wat de Quatt Full Electric doet.
+
+| Instelling | Standaard | Betekenis |
+|---|---|---|
+| `Loop guard enable` | uit | Hoofdschakelaar. Staat standaard uit, dus zonder actie verandert er niets. |
+| `Loop guard engage temp` | 19 °C | Onder deze retourtemperatuur springt de beveiliging aan. |
+| `Loop guard release temp` | 21 °C | Boven deze temperatuur laat hij weer los. |
+
+Belangrijk om te weten:
+
+- **Echte warmtevraag gaat altijd voor.** De beveiliging levert alleen een niveau als `Power House` zelf niets vraagt. Zodra de kamer warmte nodig heeft, valt hij volledig weg en is het weer een gewone Power House-run — inclusief Duo en alle begrenzingen.
+- Hij werkt alleen zolang de boiler daadwerkelijk warmte uit de lus trekt. Staat die uit, dan doet de beveiliging niets, ook niet bij een koude lus.
+- Hij meet op `HP1 water in temperature`: het water dat de lus verlaat en HP1 in gaat, het koudste punt.
+- **Bestaande beveiligingen gaan voor.** Bij een harde begrenzing op watertemperatuur of een lowflow-storing laat de lusbeveiliging volledig los; hij kan die grenzen niet oprekken.
+- Alleen `Power House`. Bij `Water Temperature Control` en bij koelen blijft de beveiliging inactief.
+
+Zie [Intuis Edel Eau 270/3](intuis-edel-eau-270.md) voor de boiler waarvoor dit gebouwd is.
+
 ## Welke instellingen zijn voor de meeste gebruikers het belangrijkst?
 
 Als je `Power House` wilt afstellen, begin dan bijna altijd hier:
