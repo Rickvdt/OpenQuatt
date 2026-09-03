@@ -173,9 +173,19 @@ the wiring between the two features:
   still assumes the boiler is the only load.
 
 Measured on 2 September 2026: level 1 delivered **2740 W** of thermal output while
-the boiler drew about **340 W** electrical, extracting roughly 550 W from the
-loop. The guard therefore over-supplies the loop several times over and settles
-into a duty cycle around the release threshold rather than running continuously.
+the boiler drew about **340 W** electrical.
+
+How much the boiler takes *out of the loop* is `E × (COP − 1)`, so it depends on
+the instantaneous COP rather than being a fixed figure. At the unit's rated COP of
+3.5–4.4 that is roughly **850–1300 W**, and it falls as the tank heats: a recovery
+from a cold tank sits near the top of that range, a 47 → 52 °C top-up well below
+it. Do not use the whole-cycle COP the Home Assistant estimator reports for this —
+it is a lower bound, biased down by heat the mid-height probe cannot see.
+
+Either way the guard over-supplies the loop by roughly a factor of two, because
+level 1 is the smallest step the compressor has. It therefore settles into a duty
+cycle around the release threshold rather than running continuously, which the
+hysteresis and `Loop guard recheck` between them are what bound.
 
 The deliberate limitation: gating on PV mode means the guard does nothing when the
 loop cools from standing loss, or when the boiler runs on its own internal time
