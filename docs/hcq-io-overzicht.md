@@ -13,6 +13,7 @@ Technische naslag voor ontwikkeling en diagnose van de Electropaultje Heatpump C
 | `R1` | CV-ketel via aan/uit | Potentiaalvrij relais: `COM` + `NO` |
 | `R2` | Configureerbaar hulprelais, standaard uit | Potentiaalvrij wisselrelais: `NC` / `COM` / `NO` |
 | `T` | Optionele lokale temperatuursensor | 1-Wire Dallas/DS18B20: `+3.3V`, `GND`, `DATA` |
+| Uitbreidingsheaders | Vrije GPIO's en voeding voor externe modules | `+5V` / `CLK` / `SDO` / `SDI` en `+3.3V` / `GPIO43` / `GPIO44` / `GND` |
 | `OTT` | Kamerthermostaat | OpenTherm slave, twee aders |
 | `OTB` | CV-ketel | OpenTherm master, twee aders |
 | `M1` | Quatt-buitenunit(s) | RS485 Modbus: `GND` / `A` / `B` |
@@ -30,6 +31,8 @@ Gebruik voor de CV-ketel altijd precies één route: `OTB` of `R1`, nooit beide 
 | Flowmeter-puls | `Q` | GPIO-ingang met pull-up | `GPIO15` |
 | CV-ketelrelais | `R1` | GPIO-uitgang | `GPIO16` |
 | Hulprelais | `R2` | GPIO-uitgang | `GPIO3` |
+| Intuis PV ECO-contact | Uitbreidingsheader | GPIO-uitgang | `GPIO43` (`U0TXD`) |
+| Intuis PV MAX-contact | Uitbreidingsheader | GPIO-uitgang | `GPIO44` |
 | DS18B20 | `T` | 1-Wire | `GPIO18` |
 | OpenTherm thermostaat | `OTT` | slave: in/uit | in `GPIO21`, uit `GPIO14` |
 | OpenTherm CV-ketel | `OTB` | master: in/uit | in `GPIO47`, uit `GPIO48` |
@@ -57,6 +60,8 @@ De pulslezer op `GPIO15` heeft een interne pull-up en een filter van 100 µs. De
 ### T: DS18B20
 
 `T` is de 1-Wire-bus voor een optionele Dallas/DS18B20. Kies deze bron alleen als de lokale aanvoertemperatuur op `DS18B20` staat.
+
+In deze fork is de DS18B20 herbestemd als tanksensor van de Intuis Edel Eau 270/3; zie [Intuis Edel Eau 270/3](intuis-edel-eau-270.md). Laat de lokale aanvoertemperatuur daarom op `PT1000` staan.
 
 ### OTT en OTB: OpenTherm
 

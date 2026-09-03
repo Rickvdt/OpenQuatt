@@ -314,6 +314,7 @@ NESTED_KEY_ORDER_RULES = {
         "oq_status_leds",
         "oq_cic_compatibility",
         "oq_aux_relay_control",
+        "oq_intuis_dhw",
         "oq_sensor_source_selects_opentherm",
         "oq_ot_slave",
         "oq_boiler_opentherm",
