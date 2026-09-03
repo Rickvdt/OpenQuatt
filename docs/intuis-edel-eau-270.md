@@ -137,6 +137,51 @@ drops sharply once the thermocline passes the probe — observed once as 46 → 
 within an hour. Consequence: stored energy is over-estimated straight after a
 draw. See `intuis-ha-control-logic.md` for how the planner copes.
 
+## Keeping the floor loop warm — the loop guard
+
+The Edel Eau is **water-source**: it takes its heat from the floor-heating loop,
+not from outside air. So every hour it runs, the loop gets colder.
+
+That is fine in winter, when the Quatt is heating anyway and simply replaces the
+heat. It is a problem in autumn: the house sits above the thermostat setpoint, so
+the Quatt idles, nothing refills the loop, and the floor drifts down toward the
+boiler's own suction temperature — measured here at just above **18 °C**. That is
+mildly uncomfortable underfoot, and it is also the point where the Edel Eau gives
+up on its heat pump and switches to its **electric element**. So an unattended
+loop costs both comfort and efficiency.
+
+The **loop guard** answers that by running one heat pump at compressor level 1
+while the boiler is drawing, which is what the official Quatt Full Electric does.
+It lives in
+[`oq_loop_guard_logic.h`](../openquatt/includes/control/oq_loop_guard_logic.h)
+with its runtime glue in
+[`oq_loop_guard_runtime.h`](../openquatt/includes/control/oq_loop_guard_runtime.h),
+called from the Power House runtime. Settings and behaviour are documented in
+[Power House](power-house.md#lusbeveiliging-optioneel-fork); what matters here is
+the wiring between the two features:
+
+- This package sets `oq_ph_loop_guard_request` whenever PV ECO or PV MAX is
+  asserted, and clears it otherwise. That is the **only** coupling, and it points
+  one way: the Intuis package writes a flag the strategy owns. The strategy never
+  references anything Intuis-specific, so profiles without this package still
+  build and behave identically.
+- Asserting the request does **not** start a heat pump. The guard has its own
+  enable switch, its own thresholds, and defers entirely to real house demand.
+- Because the request follows PV mode, **every planned PV window will also tend to
+  start a compressor**, and so will a boost. Budget for that when reading the
+  scheduler's cost estimates — see `intuis-ha-control-logic.md`, whose price model
+  still assumes the boiler is the only load.
+
+Measured on 2 September 2026: level 1 delivered **2740 W** of thermal output while
+the boiler drew about **340 W** electrical, extracting roughly 550 W from the
+loop. The guard therefore over-supplies the loop several times over and settles
+into a duty cycle around the release threshold rather than running continuously.
+
+The deliberate limitation: gating on PV mode means the guard does nothing when the
+loop cools from standing loss, or when the boiler runs on its own internal time
+slots rather than on our contacts. Relaxing that is a one-line change once there
+is enough data to justify it.
+
 ## Interaction with the local supply-temperature path — read this
 
 The DS18B20 is repurposed for the tank, but OpenQuatt's own

@@ -16,6 +16,7 @@ enum class Reason : uint8_t {
   FALLBACK_DUO = 4, KEEP_CURRENT = 5, HOLD_ACTIVE = 6, DEFROST_HOLD = 7,
   BETTER_HEAT = 8, SOFT_GUARD = 9, LESS_POWER = 10, NO_CANDIDATE = 11,
   DEFROST_BOOST = 12, RUNTIME_LEAD = 13, SINGLE_TOPOLOGY = 14, OIL_RETURN_HOLD = 15,
+  LOOP_GUARD = 16,
 };
 // clang-format on
 inline const char* request_reason_name(int code) {
@@ -24,6 +25,7 @@ inline const char* request_reason_name(int code) {
       "ph_idle", "ph_fallback_idle", "ph_fallback_single_hp1", "ph_fallback_single_hp2",
       "ph_fallback_duo", "keep_current", "hold_active", "defrost_hold", "better_heat", "soft_guard",
       "less_power", "no_candidate", "defrost_boost", "runtime_lead", "ph_single_topology", "oil_return_hold",
+      "ph_loop_guard",
   };
   // clang-format on
   return code >= 0 && code < static_cast<int>(sizeof(names) / sizeof(names[0])) ? names[code] : names[0];

@@ -184,7 +184,14 @@ interval:
             id(oq_intuis_pv_max_relay).turn_off();
           }
 
-          // Phase 3: publish diagnostics.
+          // Phase 3: tell the heating strategy we are drawing heat out of the
+          // floor loop, so its loop guard may keep the loop from being chilled
+          // while the house itself needs no heat. Asserting the request does
+          // not start a heat pump on its own — the guard has its own enable
+          // switch and temperature thresholds. See oq_power_house_strategy.yaml.
+          id(oq_ph_loop_guard_request) = (mode != 0);
+
+          // Phase 4: publish diagnostics.
           std::string status =
               mode == 2 ? "PV MAX active" : (mode == 1 ? "PV ECO active" : "Off");
           if (!id(oq_intuis_tank_temp).has_state() ||

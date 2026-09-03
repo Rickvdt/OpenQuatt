@@ -7,6 +7,7 @@
 
 #include "../performance/hp_perf_frequency.h"
 #include "oq_compressor_frequency_runtime.h"
+#include "oq_loop_guard_runtime.h"
 #include "oq_power_house_demand_logic.h"
 #include "oq_power_house_dispatch_logic.h"
 
@@ -23,6 +24,7 @@ struct TickConfig {
   float topology_heat_advantage_w;
   int defrost_comp_min_f;
   int defrost_comp_boost_steps;
+  float loop_guard_min_flow_lph;
 };
 
 class Runtime {
@@ -107,8 +109,12 @@ class Runtime {
     id(oq_phouse_demand_external) = demand.external;
     id(oq_demand_raw) = demand.raw_demand;
 
+    const int guard_demand =
+        oq_loop_guard_runtime::apply(now_ms, config.loop_guard_min_flow_lph, config.demand_max_f, demand.raw_demand,
+                                     demand.requested_w, this->last_loop_guard_status_);
+
     const auto filtered =
-        oq_power_house::filter_demand(demand.raw_demand, id(oq_demand_filtered), id(oq_demand_filter_ramp_up_budget),
+        oq_power_house::filter_demand(guard_demand, id(oq_demand_filtered), id(oq_demand_filter_ramp_up_budget),
                                       id(oq_demand_filter_ramp_up_step_min).state, cadence.dt_s, config.demand_max_f);
     id(oq_demand_filtered_prev) = filtered.previous;
     id(oq_demand_filter_ramp_up_budget) = filtered.ramp_budget;
@@ -190,6 +196,18 @@ class Runtime {
     id(oq_P_hp_cap_w) = dispatch.capacity_w;
     id(oq_P_deficit_w) = dispatch.deficit_w;
 
+    // Loop guard pins one compressor at level 1 when it owns the request. The
+    // pin is deliberate rather than left to the dispatcher: the guard inflates
+    // the request to clear the low-load latch, which the dispatcher would
+    // otherwise read as a call for level 2. See oq_loop_guard_logic.h.
+    if (id(oq_ph_loop_guard_owns_request) && dispatch.output_valid) {
+      const bool hp2_only = dispatch.hp2_level > 0 && dispatch.hp1_level == 0;
+      id(oq_ph_request_hp1_level) = hp2_only ? 0 : 1;
+      id(oq_ph_request_hp2_level) = hp2_only ? 1 : 0;
+      id(oq_ph_request_owner_hp) = hp2_only ? 2 : 1;
+      id(oq_ph_request_reason_code) = static_cast<int>(oq_power_house_dispatch::Reason::LOOP_GUARD);
+    }
+
 #if OQ_TOPOLOGY_DUO
     const std::string optimizer_reason(oq_power_house_dispatch::request_reason_name(static_cast<int>(dispatch.reason)));
     if (optimizer_reason != this->last_optimizer_reason_) {
@@ -227,9 +245,12 @@ class Runtime {
     id(oq_phouse_demand_external) = false;
     id(oq_P_hp_cap_w) = 0.0f;
     id(oq_P_deficit_w) = 0.0f;
+    oq_loop_guard_runtime::reset();
   }
 
  private:
+  std::string last_loop_guard_status_;
+
   static bool near_(float value, float expected) { return std::isfinite(value) && std::fabs(value - expected) < 0.25f; }
 
   template <typename T>

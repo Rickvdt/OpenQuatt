@@ -57,6 +57,37 @@ globals:
     restore_value: false
     initial_value: '0'
 
+  # Loop guard (fork). The request flag lives here so this strategy never
+  # depends on an optional hardware package: with no heat-drawing appliance
+  # fitted nothing writes it and the guard can never engage. oq_intuis_dhw.yaml
+  # is the only writer today.
+  - id: oq_ph_loop_guard_request
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+  - id: oq_ph_loop_guard_active
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+  # True only when the guard, not the house model, raised the power request.
+  - id: oq_ph_loop_guard_owns_request
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+  # When continuous adequate flow began; 0 means no flow.
+  - id: oq_ph_loop_guard_flow_ok_since_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: '0'
+
+  - id: oq_ph_loop_guard_lockout_until_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: '0'
+
 select:
   - platform: template
     id: oq_ph_response_profile
@@ -196,7 +227,89 @@ number:
     optimistic: true
     initial_value: 1
 
+  - platform: template
+    id: ph_loop_guard_on_c
+    name: "Loop guard engage temp"
+    icon: mdi:thermometer-chevron-down
+    unit_of_measurement: "°C"
+    min_value: 10
+    max_value: 30
+    step: 0.5
+    restore_value: true
+    optimistic: true
+    initial_value: 19
+    entity_category: config
+
+  - platform: template
+    id: ph_loop_guard_off_c
+    name: "Loop guard release temp"
+    icon: mdi:thermometer-chevron-up
+    unit_of_measurement: "°C"
+    min_value: 10
+    max_value: 35
+    step: 0.5
+    restore_value: true
+    optimistic: true
+    initial_value: 21
+    entity_category: config
+
+  - platform: template
+    id: ph_loop_guard_flow_settle_s
+    name: "Loop guard flow settle"
+    icon: mdi:timer-sand
+    unit_of_measurement: "s"
+    min_value: 30
+    max_value: 600
+    step: 10
+    restore_value: true
+    optimistic: true
+    initial_value: 120
+    entity_category: config
+
+  - platform: template
+    id: ph_loop_guard_recheck_min
+    name: "Loop guard recheck"
+    icon: mdi:timer-lock-outline
+    unit_of_measurement: "min"
+    min_value: 0
+    max_value: 120
+    step: 5
+    restore_value: true
+    optimistic: true
+    initial_value: 30
+    entity_category: config
+
+switch:
+  # Master enable. Defaults off so flashing cannot change heating behaviour
+  # until the guard is deliberately switched on.
+  - platform: template
+    id: ph_loop_guard_enable
+    name: "Loop guard enable"
+    icon: mdi:snowflake-alert
+    restore_mode: RESTORE_DEFAULT_OFF
+    optimistic: true
+    entity_category: config
+
+binary_sensor:
+  - platform: template
+    id: ph_loop_guard_active_state
+    name: "Loop guard active"
+    icon: mdi:heat-wave
+    entity_category: diagnostic
+    lambda: |-
+      return id(oq_ph_loop_guard_active);
+
 text_sensor:
+  # Explains what the guard is doing, which is otherwise opaque: an idle guard
+  # may be disabled, waiting on a heat draw, still flushing the sensor, or
+  # locked out after a settled reading showed the loop was already fine.
+  - platform: template
+    id: oq_ph_loop_guard_status
+    name: "Loop guard status"
+    icon: mdi:heat-wave
+    entity_category: diagnostic
+    update_interval: never
+
   - platform: template
     id: oq_duo_optimizer_reason
     name: "Duo optimizer reason"
@@ -277,6 +390,8 @@ interval:
     startup_delay: 4000ms
     then:
       - lambda: |-
+          // Pass the compile-time tuning through to the runtime; all decisions
+          // live in oq_power_house_runtime.h and the logic headers it calls.
           oq_power_house_runtime::runtime().tick({
               (uint32_t) ${oq_heat_loop_powerhouse_s} * 1000UL,
               (int) ${oq_strategy_demand_max_f},
@@ -287,4 +402,5 @@ interval:
               ${oq_optimizer_topology_heat_advantage_w},
               (int) roundf(${oq_defrost_comp_min_f}),
               (int) roundf(${oq_defrost_comp_boost_steps}),
+              ${oq_cm_min_flow_lph}f,
           });
