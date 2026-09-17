@@ -220,6 +220,7 @@ NESTED_KEY_ORDER_RULES = {
         "oq_cooling_strategy",
         "oq_heating_curve_strategy",
         "oq_power_house_strategy",
+        "oq_loop_guard",
     ),
     ("openquatt/packages/30_thermal_pipeline.yaml", "packages"): (
         "oq_thermal_request_control",
@@ -261,6 +262,7 @@ NESTED_KEY_ORDER_RULES = {
         "oq_status_leds",
         "oq_cic_compatibility",
         "oq_aux_relay_control",
+        "oq_intuis_dhw",
         "oq_sensor_source_selects_opentherm",
         "oq_ot_slave",
         "oq_boiler_opentherm",

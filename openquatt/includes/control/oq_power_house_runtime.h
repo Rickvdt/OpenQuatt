@@ -8,6 +8,7 @@
 #include "../performance/hp_perf_frequency.h"
 #include "oq_compressor_frequency_runtime.h"
 #include "oq_heat_intent_runtime.h"
+#include "oq_loop_guard_runtime.h"
 #include "oq_power_house_demand_logic.h"
 #include "oq_power_house_dispatch_logic.h"
 
@@ -228,6 +229,7 @@ class Runtime {
     } else if (applied_total == 0) {
       this->fast_floor_w_ = 0.0f;
     }
+    oq_loop_guard_runtime::apply(now_ms, config.demand_max_f, raw_demand, requested_w);
     id(oq_phouse_req_w) = requested_w;
     id(oq_phouse_last_w) = next_last_w;
     id(oq_demand_raw) = raw_demand;
@@ -254,6 +256,7 @@ class Runtime {
     id(oq_ph_request_reason_code) = static_cast<int>(dispatch.reason);
     id(oq_P_hp_cap_w) = dispatch.capacity_w;
     id(oq_P_deficit_w) = dispatch.deficit_w;
+    oq_loop_guard_runtime::pin_request(dispatch);
 
 #if OQ_TOPOLOGY_DUO
     const std::string optimizer_reason(oq_power_house_dispatch::request_reason_name(static_cast<int>(dispatch.reason)));

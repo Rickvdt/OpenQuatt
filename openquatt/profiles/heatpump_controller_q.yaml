@@ -25,6 +25,9 @@ substitutions:
   ds18b20_pin: "GPIO18"                                 # Dallas DS18B20 1-Wire input.
   oq_boiler_relay_pin: "GPIO16"                         # Relay 1 output.
   controller_aux_relay_pin: "GPIO3"                     # Relay 2 output reserved for controller logic.
+  oq_intuis_pv_eco_pin: "GPIO43"                        # Intuis PV ECO contact; header pin, also U0TXD.
+  oq_intuis_pv_max_pin: "GPIO44"                        # Intuis PV MAX contact; header pin, no ROM boot output.
+  oq_intuis_relay_inverted: "false"                     # Relay module jumpered HIGH-active (COM-HIGH bridged).
   web_auth_recovery_pin: "GPIO46"                       # Boot switch / recovery input.
   eth_mosi_pin: "GPIO10"                                # W5500 SPI MOSI.
   eth_miso_pin: "GPIO11"                                # W5500 SPI MISO.
@@ -50,6 +53,7 @@ packages:
   oq_status_leds: !include heatpump_controller_q_status_leds.yaml
   oq_cic_compatibility: !include heatpump_controller_q_cic_compatibility.yaml
   oq_aux_relay_control: !include ../oq_aux_relay_control.yaml
+  oq_intuis_dhw: !include ../oq_intuis_dhw.yaml
   oq_sensor_source_selects_opentherm: !include ../oq_sensor_source_selects_opentherm.yaml
   oq_ot_slave: !include
     file: ../oq_ot_slave.yaml
