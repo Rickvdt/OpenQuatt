@@ -82,7 +82,11 @@ class StrategyRuntimeContractTest(unittest.TestCase):
         # runtime; issue #642 copies the dispatch verdict (plus startup-inhibit
         # naming from the incident manager) into status globals here.
         # Measured 1297 lines across the four runtimes on current dev.
-        self.assertLessEqual(sum(len(source.splitlines()) for source in RUNTIMES.values()), 1300)
+        # Fork: +3 for the loop guard's call sites in oq_power_house_runtime.h
+        # (an include, an apply() and a pin_request()). Raised by exactly that
+        # much so upstream keeps the same headroom it set for itself - at 1300
+        # the fork sits at zero and any upstream line breaks the next rebase.
+        self.assertLessEqual(sum(len(source.splitlines()) for source in RUNTIMES.values()), 1303)
         self.assertLessEqual(len(HEAT_INTENT_RUNTIME.splitlines()), 90)
         self.assertLessEqual(len(LOGIC.splitlines()), 60)
 
