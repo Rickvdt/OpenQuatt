@@ -89,7 +89,12 @@ inline Output decide(const Input& in, const State& state) {
     // typed, so the pair can never collapse into chatter.
     const float release_c = std::max(in.release_c, in.engage_c + 0.5f);
     if (!state.active) {
-      if (!out.locked_out && in.loop_c < in.engage_c) out.next.active = true;
+      // Engage only on a flow-settled reading. The heat-drawing appliance
+      // circulates the loop itself the moment it starts - measured at about
+      // 290 L/h for the Intuis - so the flush happens on its flow, before any
+      // compressor is involved. A warm loop therefore costs the settle time and
+      // no compressor start at all.
+      if (!out.locked_out && out.reading_valid && in.loop_c < in.engage_c) out.next.active = true;
     } else if (out.reading_valid && in.loop_c > release_c) {
       out.next.active = false;
       // The stagnant reading falls back below the engage threshold within
@@ -158,14 +163,19 @@ inline void format_status(char* buf, size_t n, const Output& g, bool enabled, bo
   else if (g.active && g.reading_valid)
     snprintf(buf, n, "Active - loop %.1f C, asking %.0f W", loop_c, ask_w);
   else if (g.active && !g.flow_ok)
-    snprintf(buf, n, "Active - waiting for flow, asking %.0f W", ask_w);
+    snprintf(buf, n, "Active - flow lost, holding");
   else if (g.active)
-    snprintf(buf, n, "Active - flushing sensor %u/%u s", static_cast<unsigned>(g.settled_s),
+    snprintf(buf, n, "Active - resettling %u/%u s", static_cast<unsigned>(g.settled_s),
              static_cast<unsigned>(g.settle_target_s));
   else if (g.locked_out)
     snprintf(buf, n, "Loop was warm - rechecking in %u min", static_cast<unsigned>(g.recheck_remaining_min));
+  else if (!g.flow_ok)
+    snprintf(buf, n, "Waiting for flow before checking the loop");
+  else if (!g.reading_valid)
+    snprintf(buf, n, "Settling %u/%u s before checking the loop", static_cast<unsigned>(g.settled_s),
+             static_cast<unsigned>(g.settle_target_s));
   else
-    snprintf(buf, n, "Armed - loop %.1f C, engage below %.1f C", loop_c, engage_c);
+    snprintf(buf, n, "Armed - loop %.1f C settled, engage below %.1f C", loop_c, engage_c);
 }
 
 }  // namespace oq_loop_guard
