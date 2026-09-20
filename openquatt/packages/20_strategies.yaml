@@ -9,3 +9,4 @@ packages:
   oq_cooling_strategy: !include ../oq_cooling_strategy.yaml
   oq_heating_curve_strategy: !include ../oq_heating_curve_strategy.yaml
   oq_power_house_strategy: !include ../oq_power_house_strategy.yaml
+  oq_loop_guard: !include ../oq_loop_guard.yaml
