@@ -85,7 +85,10 @@ class StrategyRuntimeContractTest(unittest.TestCase):
         # performance-supply fallback added for issue #713.
         # Measured 1442 lines after issue #608 run extension integrated
         # base/effective demand, comfort stop and house-deficit semantics.
-        self.assertLessEqual(sum(len(source.splitlines()) for source in RUNTIMES.values()), 1460)
+        # Fork: +3 for the loop guard's call sites in oq_power_house_runtime.h
+        # (an include, an apply() and a pin_request()). Raised by exactly that
+        # much so upstream keeps the same headroom it set for itself.
+        self.assertLessEqual(sum(len(source.splitlines()) for source in RUNTIMES.values()), 1463)
         self.assertLessEqual(len(HEAT_INTENT_RUNTIME.splitlines()), 90)
         self.assertLessEqual(len(LOGIC.splitlines()), 60)
 
