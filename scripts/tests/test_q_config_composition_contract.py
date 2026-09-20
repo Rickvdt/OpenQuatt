@@ -61,6 +61,13 @@ class QConfigCompositionContractTest(unittest.TestCase):
         self.assertIn('oq_connection: "auto"', NETWORK_PROFILE)
         self.assertIn('oq_connection_text_internal: "false"', NETWORK_PROFILE)
 
+    # Fork: the dev channel deliberately resolves to this fork's dev-latest so the
+    # built-in updater installs fork builds; main and release_manifest_url stay on
+    # upstream. Only the repository owner differs - the path shape, topology
+    # templating and channel routing are still asserted exactly as upstream wrote
+    # them, so a genuine regression in the routing would still fail here.
+    DEV_OWNER = "Rickvdt/OpenQuatt"
+
     def test_topology_package_owns_expanded_manifest_routing(self) -> None:
         for package, topology_config, topology, alternate in (
             (SINGLE_TOPOLOGY_PACKAGE, SINGLE_TOPOLOGY, "single", "duo"),
@@ -89,7 +96,7 @@ class QConfigCompositionContractTest(unittest.TestCase):
             )
             self.assertEqual(
                 dev_url,
-                f"https://github.com/OpenQuatt/OpenQuatt/releases/download/dev-latest/openquatt-heatpump-controller-q-{topology}-ota.manifest.json",
+                f"https://github.com/{self.DEV_OWNER}/releases/download/dev-latest/openquatt-heatpump-controller-q-{topology}-ota.manifest.json",
             )
             self.assertEqual(
                 alternate_main_url,
@@ -97,7 +104,7 @@ class QConfigCompositionContractTest(unittest.TestCase):
             )
             self.assertEqual(
                 alternate_dev_url,
-                f"https://github.com/OpenQuatt/OpenQuatt/releases/download/dev-latest/openquatt-heatpump-controller-q-{alternate}-ota.manifest.json",
+                f"https://github.com/{self.DEV_OWNER}/releases/download/dev-latest/openquatt-heatpump-controller-q-{alternate}-ota.manifest.json",
             )
             self.assertEqual(
                 yaml_scalar(package, "release_manifest_url"),

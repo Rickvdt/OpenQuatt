@@ -83,7 +83,10 @@ class StrategyRuntimeContractTest(unittest.TestCase):
         # naming from the incident manager) into status globals here.
         # Measured 1318 lines after the bounded Power House single-HP
         # performance-supply fallback added for issue #713.
-        self.assertLessEqual(sum(len(source.splitlines()) for source in RUNTIMES.values()), 1320)
+        # Fork: +3 for the loop guard's call sites in oq_power_house_runtime.h
+        # (an include, an apply() and a pin_request()). Raised by exactly that
+        # much so upstream keeps the same headroom it set for itself.
+        self.assertLessEqual(sum(len(source.splitlines()) for source in RUNTIMES.values()), 1323)
         self.assertLessEqual(len(HEAT_INTENT_RUNTIME.splitlines()), 90)
         self.assertLessEqual(len(LOGIC.splitlines()), 60)
 
