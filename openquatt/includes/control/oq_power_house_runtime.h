@@ -13,6 +13,7 @@
 #include "oq_heat_intent_runtime.h"
 #include "oq_boot_resume_runtime.h"
 #include "esphome/components/openquatt_incident_manager/OpenQuattRestartHandoff.h"
+#include "oq_loop_guard_runtime.h"
 #include "oq_power_house_demand_logic.h"
 #if defined(OQ_POWER_HOUSE_LEARNING_TARGET) && OQ_POWER_HOUSE_LEARNING_TARGET == 1
 #include <atomic>
@@ -502,6 +503,7 @@ class Runtime {
     }
     this->run_ext_effective_w_ = effective_requested_w;
     requested_w = effective_requested_w;
+    oq_loop_guard_runtime::apply(now_ms, requested_w);
     id(oq_phouse_req_w) = requested_w;
     id(oq_phouse_last_w) = base_last_w;
     id(oq_ph_run_ext_base_w) = base_requested_w;
@@ -553,6 +555,7 @@ class Runtime {
         std::isfinite(this->warmup_request_w_) ? NAN : dispatch.deficit_w);
     const bool house_saturated = oq_power_house_run_extension::compute_house_saturated(base_capped_w, house_deficit_w);
     id(oq_P_deficit_w) = house_deficit_w;
+    oq_loop_guard_runtime::pin_request(dispatch);
 
 #if OQ_TOPOLOGY_DUO
     const std::string optimizer_reason(oq_power_house_dispatch::request_reason_name(static_cast<int>(dispatch.reason)));
