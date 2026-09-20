@@ -87,7 +87,10 @@ class StrategyRuntimeContractTest(unittest.TestCase):
         # base/effective demand, comfort stop and house-deficit semantics.
         # Measured 1464 lines after combining the external curve modifier
         # with dev's confirmed-stop transition to CM0.
-        self.assertLessEqual(sum(len(source.splitlines()) for source in RUNTIMES.values()), 1470)
+        # Fork: +3 for the loop guard's call sites in oq_power_house_runtime.h
+        # (an include, an apply() and a pin_request()). Raised by exactly that
+        # much so upstream keeps the same headroom it set for itself.
+        self.assertLessEqual(sum(len(source.splitlines()) for source in RUNTIMES.values()), 1473)
         self.assertLessEqual(len(HEAT_INTENT_RUNTIME.splitlines()), 90)
         # The selector now returns source provenance alongside its value; keep it local.
         self.assertLessEqual(len(LOGIC.splitlines()), 75)
