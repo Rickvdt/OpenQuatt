@@ -359,7 +359,8 @@ void test_duo_holds_and_boost() {
   assert(strcmp(request_reason_name(0), "ph_idle") == 0);
   assert(strcmp(request_reason_name(14), "ph_single_topology") == 0);
   assert(strcmp(request_reason_name(15), "oil_return_hold") == 0);
-  assert(strcmp(request_reason_name(16), "ph_idle") == 0);
+  assert(strcmp(request_reason_name(16), "ph_loop_guard") == 0);
+  assert(strcmp(request_reason_name(17), "ph_idle") == 0);
 }
 }  // namespace
 int main() {
