@@ -1,0 +1,173 @@
+# ==============================================================================
+# OpenQuatt - Floor loop guard (fork addition)
+# ==============================================================================
+#
+# Goal:
+#   Keep the heating loop from being chilled by an appliance that draws heat out
+#   of it while the house itself needs none - a water-source DHW heat pump, for
+#   instance. The Quatt then runs one compressor at level 1, which is what the
+#   official Full Electric does.
+#
+# Role in architecture:
+#   Owns every entity and global the guard needs. The decision lives in
+#   includes/control/oq_loop_guard_logic.h and the id() marshalling in
+#   includes/control/oq_loop_guard_runtime.h; oq_power_house_runtime.h carries
+#   only three call sites.
+#
+# Why a separate package:
+#   Upstream holds its strategy YAMLs and runtime headers to line budgets
+#   (scripts/tests/test_strategy_runtime_contract.py). Keeping fork entities in
+#   a fork file costs upstream nothing, and keeps the rebase surface to the
+#   three lines that genuinely have to live in the Power House runtime.
+#
+# What this package DOES NOT do:
+#   - Does not decide Control Mode or thermal demand
+#   - Does not write compressor registers; it only raises a request the existing
+#     dispatcher and actuator path then handle normally
+#
+# ==============================================================================
+
+globals:
+  # Raised by an appliance that extracts heat from the heating loop. Living here
+  # rather than in the strategy means Power House never depends on an optional
+  # hardware package: with nothing fitted nothing writes it and the guard can
+  # never engage. oq_intuis_dhw.yaml is the only writer today.
+  - id: oq_ph_loop_guard_request
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+  - id: oq_ph_loop_guard_active
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+  # True only when the guard, not the house model, raised the power request.
+  - id: oq_ph_loop_guard_owns_request
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+  # When continuous adequate flow began; 0 means no flow.
+  - id: oq_ph_loop_guard_flow_ok_since_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: '0'
+
+  - id: oq_ph_loop_guard_lockout_until_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: '0'
+
+number:
+  - platform: template
+    id: ph_loop_guard_on_c
+    name: "Loop guard engage temp"
+    icon: mdi:thermometer-chevron-down
+    unit_of_measurement: "°C"
+    min_value: 10
+    max_value: 30
+    step: 0.5
+    restore_value: true
+    optimistic: true
+    initial_value: 19
+    entity_category: config
+
+  - platform: template
+    id: ph_loop_guard_off_c
+    name: "Loop guard release temp"
+    icon: mdi:thermometer-chevron-up
+    unit_of_measurement: "°C"
+    min_value: 10
+    max_value: 35
+    step: 0.5
+    restore_value: true
+    optimistic: true
+    initial_value: 21
+    entity_category: config
+
+  - platform: template
+    id: ph_loop_guard_flow_settle_s
+    name: "Loop guard flow settle"
+    icon: mdi:timer-sand
+    unit_of_measurement: "s"
+    min_value: 30
+    max_value: 600
+    step: 10
+    restore_value: true
+    optimistic: true
+    initial_value: 120
+    entity_category: config
+
+  - platform: template
+    id: ph_loop_guard_recheck_min
+    name: "Loop guard recheck"
+    icon: mdi:timer-lock-outline
+    unit_of_measurement: "min"
+    min_value: 0
+    max_value: 120
+    step: 5
+    restore_value: true
+    optimistic: true
+    initial_value: 30
+    entity_category: config
+
+  # Flow below which the loop reading is not trusted. Was a compile-time
+  # substitution passed through TickConfig; made adjustable because the measured
+  # Intuis-driven flow of about 290 L/h passes the 250 L/h system minimum while
+  # still reading roughly 2.5 C below the true loop temperature.
+  - platform: template
+    id: ph_loop_guard_min_flow_lph
+    name: "Loop guard minimum flow"
+    icon: mdi:waves-arrow-right
+    unit_of_measurement: "L/h"
+    min_value: 100
+    max_value: 1200
+    step: 10
+    restore_value: true
+    optimistic: true
+    initial_value: 250
+    entity_category: config
+
+switch:
+  # Master enable. Defaults off so flashing cannot change heating behaviour
+  # until the guard is deliberately switched on.
+  - platform: template
+    id: ph_loop_guard_enable
+    name: "Loop guard enable"
+    icon: mdi:snowflake-alert
+    restore_mode: RESTORE_DEFAULT_OFF
+    optimistic: true
+    entity_category: config
+
+binary_sensor:
+  - platform: template
+    id: ph_loop_guard_active_state
+    name: "Loop guard active"
+    icon: mdi:heat-wave
+    entity_category: diagnostic
+    lambda: |-
+      return id(oq_ph_loop_guard_active);
+
+text_sensor:
+  # Explains what the guard is doing, which is otherwise opaque: an idle guard
+  # may be disabled, waiting on a heat draw, still flushing the sensor, or
+  # locked out after a settled reading showed the loop was already fine.
+  - platform: template
+    id: oq_ph_loop_guard_status
+    name: "Loop guard status"
+    icon: mdi:heat-wave
+    entity_category: diagnostic
+    update_interval: never
+
+interval:
+  - interval: 10s
+    startup_delay: 5s
+    then:
+      - lambda: |-
+          // Clear the latch when Power House is not running at all - cooling
+          // (CM5) or a non-Power-House heat mode return from tick() before the
+          // guard is evaluated, so without this the flags would stay stale.
+          if (id(oq_control_mode_code) == 5 || id(oq_heat_mode_code) == 1) {
+            oq_loop_guard_runtime::reset();
+          }
