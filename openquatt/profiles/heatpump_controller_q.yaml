@@ -24,6 +24,9 @@ substitutions:
   ds18b20_pin: "GPIO18"                                 # Dallas DS18B20 1-Wire input.
   oq_boiler_relay_pin: "GPIO16"                         # Relay 1 output.
   controller_aux_relay_pin: "GPIO3"                     # Relay 2 output reserved for controller logic.
+  oq_intuis_pv_eco_pin: "GPIO43"                        # Intuis PV ECO contact; header pin, also U0TXD.
+  oq_intuis_pv_max_pin: "GPIO44"                        # Intuis PV MAX contact; header pin, no ROM boot output.
+  oq_intuis_relay_inverted: "false"                     # Relay module jumpered HIGH-active (COM-HIGH bridged).
   web_auth_recovery_pin: "GPIO46"                       # Boot switch / recovery input.
   eth_mosi_pin: "GPIO10"                                # W5500 SPI MOSI.
   eth_miso_pin: "GPIO11"                                # W5500 SPI MISO.
@@ -45,11 +48,11 @@ substitutions:
   hpcq_status_led_inverted: "false"                     # Set true when the board LED is active-low.
 
   main_release_manifest_url: "https://github.com/OpenQuatt/OpenQuatt/releases/latest/download/openquatt-heatpump-controller-q-${oq_topology}-ota.manifest.json"
-  dev_release_manifest_url: "https://github.com/OpenQuatt/OpenQuatt/releases/download/dev-latest/openquatt-heatpump-controller-q-${oq_topology}-ota.manifest.json"
+  dev_release_manifest_url: "https://github.com/Rickvdt/OpenQuatt/releases/download/dev-latest/openquatt-heatpump-controller-q-${oq_topology}-ota.manifest.json"
   # Default update source follows main; release/PR CI may override release_manifest_url explicitly.
   release_manifest_url: "${main_release_manifest_url}"
   alternate_topology_main_release_manifest_url: "https://github.com/OpenQuatt/OpenQuatt/releases/latest/download/openquatt-heatpump-controller-q-${alternate_topology}-ota.manifest.json"
-  alternate_topology_dev_release_manifest_url: "https://github.com/OpenQuatt/OpenQuatt/releases/download/dev-latest/openquatt-heatpump-controller-q-${alternate_topology}-ota.manifest.json"
+  alternate_topology_dev_release_manifest_url: "https://github.com/Rickvdt/OpenQuatt/releases/download/dev-latest/openquatt-heatpump-controller-q-${alternate_topology}-ota.manifest.json"
 
 esphome:
   build_flags:
@@ -62,6 +65,7 @@ packages:
   oq_status_leds: !include heatpump_controller_q/status_leds.yaml
   oq_cic_compatibility: !include heatpump_controller_q/cic_compatibility.yaml
   oq_aux_relay_control: !include ../oq_aux_relay_control.yaml
+  oq_intuis_dhw: !include ../oq_intuis_dhw.yaml
   oq_sensor_source_selects_opentherm: !include ../oq_sensor_source_selects_opentherm.yaml
   oq_ot_slave: !include
     file: ../oq_ot_slave.yaml
