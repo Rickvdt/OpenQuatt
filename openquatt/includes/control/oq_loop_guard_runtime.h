@@ -56,12 +56,17 @@ inline void apply(uint32_t now_ms, int demand_max_f, int& raw_demand, float& req
   const auto plan = oq_loop_guard::plan_request(guard.active, raw_demand, requested_w, level1_w,
                                                 id(house_rated_power_w).state, demand_max_f);
   id(oq_ph_loop_guard_owns_request) = plan.owns_request;
-  if (plan.owns_request) requested_w = plan.requested_w;
-  if (guard.active) raw_demand = plan.demand;
+  // Both levers move together or neither does. Flooring demand while the house
+  // owns the request would raise f on the dispatcher's behalf without the pin
+  // that stops the inflated figure reading as a call for level 2.
+  if (plan.owns_request) {
+    requested_w = plan.requested_w;
+    raw_demand = plan.demand;
+  }
 
   char buf[96];
-  oq_loop_guard::format_status(buf, sizeof(buf), guard, in.enabled, in.heat_draw, loop_c, in.engage_c,
-                               plan.requested_w);
+  oq_loop_guard::format_status(buf, sizeof(buf), guard, in.enabled, in.heat_draw, plan.owns_request, loop_c,
+                               in.engage_c, plan.requested_w);
   static std::string last_status;
   if (last_status != buf) {
     last_status = buf;
