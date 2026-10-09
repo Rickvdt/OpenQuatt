@@ -26,6 +26,12 @@
 
 namespace oq_loop_guard {
 
+// Backoff after a protection released a running guard. Deliberately far shorter
+// than the warm-loop recheck: that one is long because a stagnant reading needs
+// time to become meaningful again, whereas a limiter or flow fault only needs
+// long enough not to restart the compressor on its own heels.
+constexpr uint32_t kProtectionBackoffMs = 300000u;  // 5 minutes
+
 struct Input {
   uint32_t now_ms = 0;
   bool enabled = false;        // master enable switch
@@ -81,8 +87,16 @@ inline Output decide(const Input& in, const State& state) {
   out.recheck_remaining_min =
       out.locked_out ? static_cast<uint32_t>(state.lockout_until_ms - in.now_ms) / 60000u + 1u : 0u;
 
-  out.permitted = in.enabled && in.heat_draw && in.protections_ok && std::isfinite(in.loop_c);
+  // Separate a fault from an ordinary stand-down. Losing a protection or the
+  // reading while running is a fault and must back off before trying again. The
+  // user switching the guard off, or the heat draw simply ending, is normal and
+  // must not lock out the next window - it may only be minutes away.
+  const bool fault = !in.protections_ok || !std::isfinite(in.loop_c);
+  out.permitted = in.enabled && in.heat_draw && !fault;
   if (!out.permitted) {
+    // Without this the guard re-engages on the very next pass: flow never
+    // stopped, so flow_ok_since_ms survives and the reading is still settled.
+    if (state.active && fault) out.next.lockout_until_ms = in.now_ms + kProtectionBackoffMs;
     out.next.active = false;
   } else {
     // Hold the release threshold above the engage threshold whatever the user
@@ -107,13 +121,19 @@ inline Output decide(const Input& in, const State& state) {
   return out;
 }
 
+// Level-1 thermal output, with a conservative stand-in while the performance
+// model has no estimate yet. Shared so the ask and the ownership test can never
+// drift onto different notions of "level 1".
+inline float level1_or_default(float level1_thermal_w) {
+  return (std::isfinite(level1_thermal_w) && level1_thermal_w > 0.0f) ? level1_thermal_w : 1800.0f;
+}
+
 // Power to request while the guard is active: the level-1 thermal output plus
 // enough margin to arm the supervisor's Power House low-load latch, which
 // compares the requested power against exactly that figure. Asking for less is
 // correctly refused, because one compressor step would only cycle.
 inline float requested_power_w(float level1_thermal_w) {
-  float p1 = level1_thermal_w;
-  if (!std::isfinite(p1) || p1 <= 0.0f) p1 = 1800.0f;
+  const float p1 = level1_or_default(level1_thermal_w);
   // The latch arms at on_factor * P1 (on_factor <= 1.10) but no lower than
   // off_w + min_hysteresis (<= 0.90 * P1 + 400 W); clear both forms.
   return std::max(p1 * 1.20f, p1 + 450.0f);
@@ -141,7 +161,13 @@ inline Plan plan_request(bool active, int raw_demand, float model_requested_w, f
   out.demand = raw_demand;
   if (!active) return out;
   out.requested_w = requested_power_w(level1_thermal_w);
-  out.owns_request = !std::isfinite(model_requested_w) || model_requested_w < out.requested_w;
+  // Ownership is decided against level 1 itself, never against the inflated
+  // ask. The inflation exists only to clear the low-load latch; testing against
+  // it would also pin level 1 for a house already asking more than level 1 can
+  // deliver, capping real heat demand across a band roughly 450 W wide. The
+  // rule is that the guard acts only while the house wants less than one
+  // compressor at level 1 - above that the dispatcher is left entirely alone.
+  out.owns_request = !std::isfinite(model_requested_w) || model_requested_w < level1_or_default(level1_thermal_w);
   int needed = 1;
   if (std::isfinite(rated_w) && rated_w > 0.0f && demand_max_f > 0)
     needed = static_cast<int>(std::ceil(demand_max_f * (out.requested_w / rated_w)));
@@ -152,14 +178,16 @@ inline Plan plan_request(bool active, int raw_demand, float model_requested_w, f
 // One-line status for the diagnostic text sensor. An idle guard is otherwise
 // opaque: it may be disabled, waiting on a heat draw, still flushing the sensor,
 // or locked out after a settled reading showed the loop was already fine.
-inline void format_status(char* buf, size_t n, const Output& g, bool enabled, bool heat_draw, float loop_c,
-                          float engage_c, float ask_w) {
+inline void format_status(char* buf, size_t n, const Output& g, bool enabled, bool heat_draw, bool owns_request,
+                          float loop_c, float engage_c, float ask_w) {
   if (!enabled)
     snprintf(buf, n, "Disabled");
   else if (!heat_draw)
     snprintf(buf, n, "Idle - no heat draw on the loop");
   else if (!g.permitted)
     snprintf(buf, n, "Blocked by a protection or a missing reading");
+  else if (g.active && !owns_request)
+    snprintf(buf, n, "Yielded to house demand - loop %.1f C", loop_c);
   else if (g.active && g.reading_valid)
     snprintf(buf, n, "Active - loop %.1f C, asking %.0f W", loop_c, ask_w);
   else if (g.active && !g.flow_ok)
