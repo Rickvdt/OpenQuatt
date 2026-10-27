@@ -383,8 +383,54 @@ void test_pacing_defaults_and_configuration() {
   assert(out.next.reason != Reason::ON_TARGET && out.setpoint_lph > 800.0f);
 }
 
+void test_oil_return_holds_the_flow_and_discards_its_samples() {
+  State state;
+  uint32_t now = 1000;
+  run(state, now, 30, 1.5f);  // settle
+  run(state, now, 12, 1.5f);  // first step: 800 -> 700
+  assert(near(state.setpoint_lph, 700.0f));
+  // Three minutes of oil return with a rise that would otherwise drive the flow up hard.
+  Output out;
+  for (int i = 0; i < 18; ++i) {
+    Input in = heating(now, state.setpoint_lph, 9.0f);
+    in.units[0].oil_return = true;
+    out = decide(in, state);
+    state = out.next;
+    now += kTickMs;
+    assert(out.controlling && out.next.reason == Reason::OIL_RETURN && near(out.setpoint_lph, 700.0f));
+  }
+  // The two-minute hold afterwards: still held, still discarding.
+  out = run(state, now, 11, 9.0f);
+  assert(out.next.reason == Reason::OIL_RETURN && near(out.setpoint_lph, 700.0f) && out.next.rise_count == 0);
+  // Then normal samples again: the flow carries on down from 700, untouched by
+  // the 9 K the oil return showed.
+  out = run(state, now, 12, 1.5f);
+  assert(out.setpoint_lph < 700.0f);
+}
+
+void test_oil_return_on_either_duo_unit_holds_but_never_overrides_a_water_limit() {
+  State state;
+  uint32_t now = 1000;
+  run(state, now, 31, 3.0f);
+  // HP2 runs the oil return: the water runs through both, so the flow is held.
+  Input in = heating(now, state.setpoint_lph, 3.0f);
+  in.unit_count = 2;
+  in.units[1].heating = true;
+  in.units[1].temps_fresh = true;
+  in.units[1].in_c = 33.0f;
+  in.units[1].out_c = 36.0f;
+  in.units[1].level = 3;
+  in.units[1].oil_return = true;
+  Output out = decide(in, state);
+  assert(out.next.reason == Reason::OIL_RETURN);
+  // The water temperature protection still wins: flow before power.
+  in.water_limit_active = true;
+  out = decide(in, out.next);
+  assert(out.next.reason == Reason::WATER_LIMIT && out.setpoint_lph == 1200.0f);
+}
+
 void test_reason_text_is_defined_for_every_reason() {
-  for (int r = 0; r <= static_cast<int>(Reason::LIMIT_AT_MAX); ++r) {
+  for (int r = 0; r <= static_cast<int>(Reason::OIL_RETURN); ++r) {
     const char* text = reason_text(static_cast<Reason>(r));
     assert(text != nullptr && text[0] != '\0');
   }
@@ -410,6 +456,8 @@ int main() {
   test_warning_when_the_water_limit_persists_at_maximum_flow();
   test_duo_reports_the_rise_per_unit();
   test_pacing_defaults_and_configuration();
+  test_oil_return_holds_the_flow_and_discards_its_samples();
+  test_oil_return_on_either_duo_unit_holds_but_never_overrides_a_water_limit();
   test_reason_text_is_defined_for_every_reason();
   return 0;
 }

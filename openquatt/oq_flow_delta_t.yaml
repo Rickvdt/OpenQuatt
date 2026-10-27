@@ -27,6 +27,9 @@
 #     Flow Setpoint. When the water temperature protection cuts power, the flow
 #     goes straight to the maximum first; if the protection is still cutting
 #     power five minutes later, Flow Delta T Warning turns on.
+#   - During an oil return cycle the flow is held where it is: the compressor
+#     runs a forced pattern, so the rise then says nothing about the load. The
+#     samples are discarded for the cycle and two minutes after it.
 #
 # What this package DOES NOT do:
 #   - Does not touch cooling: cooling keeps its own fixed setpoint

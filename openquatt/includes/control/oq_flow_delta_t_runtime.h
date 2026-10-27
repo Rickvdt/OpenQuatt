@@ -25,11 +25,12 @@ constexpr uint64_t kFreshMs = 30000;
 // A unit counts as heating with exactly the rule the boot-resume and water
 // performance code use: heating working mode with the compressor turning.
 inline oq_flow_delta_t::Unit unit_(const oq_sources::HeatPumpReceipts& raw, uint64_t now_ms, float in_offset_c,
-                                   float out_offset_c, bool defrost, int level) {
+                                   float out_offset_c, bool defrost, bool oil_return, int level) {
   oq_flow_delta_t::Unit unit;
   unit.heating = raw.working_mode.fresh(now_ms, kFreshMs) && raw.working_mode.value == 2.0f &&
                  raw.compressor_frequency.fresh(now_ms, kFreshMs) && raw.compressor_frequency.value > 0.5f;
   unit.defrost = defrost;
+  unit.oil_return = oil_return;
   unit.temps_fresh = raw.water_in.fresh(now_ms, kFreshMs) && raw.water_out.fresh(now_ms, kFreshMs) &&
                      isfinite(in_offset_c) && isfinite(out_offset_c);
   unit.in_c = raw.water_in.value + in_offset_c;
@@ -97,11 +98,13 @@ inline float apply(float selected_setpoint_lph, int cm_code) {
   // protection and service tasks keep the normal setpoints.
   in.heating_mode = cm_code == 2;
   in.units[0] = unit_(oq_sources::hp1, now_ms, id(hp1_water_in_temp_offset).state, id(hp1_water_out_temp_offset).state,
-                      id(hp1_defrost).state || id(hp1_4_way_valve).state, static_cast<int>(id(hp1_last_applied_level)));
+                      id(hp1_defrost).state || id(hp1_4_way_valve).state, id(hp1_prot_oil_return).state,
+                      static_cast<int>(id(hp1_last_applied_level)));
 #if OQ_TOPOLOGY_DUO
   in.unit_count = 2;
   in.units[1] = unit_(oq_sources::hp2, now_ms, id(hp2_water_in_temp_offset).state, id(hp2_water_out_temp_offset).state,
-                      id(hp2_defrost).state || id(hp2_4_way_valve).state, static_cast<int>(id(hp2_last_applied_level)));
+                      id(hp2_defrost).state || id(hp2_4_way_valve).state, id(hp2_prot_oil_return).state,
+                      static_cast<int>(id(hp2_last_applied_level)));
 #else
   in.unit_count = 1;
 #endif

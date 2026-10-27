@@ -39,8 +39,9 @@ constexpr float kGain = 0.5f;                    // move half of the gap per ste
 constexpr float kLowFlowMarginLph = 50.0f;       // floor kept above the low-flow fault threshold
 constexpr float kShortfallLph = 75.0f;           // flow this far below the setpoint: pump at its limit
 constexpr float kCeilingMarginLph = 25.0f;
-constexpr float kMinUsableRiseK = 0.2f;     // below this a sample says nothing about the flow
-constexpr uint32_t kWarnAfterMs = 300000u;  // water limit still cutting power after this at maximum flow
+constexpr float kMinUsableRiseK = 0.2f;         // below this a sample says nothing about the flow
+constexpr uint32_t kWarnAfterMs = 300000u;      // water limit still cutting power after this at maximum flow
+constexpr uint32_t kOilReturnHoldMs = 120000u;  // after oil return; the same hold Power House uses
 
 enum class Reason : uint8_t {
   OFF = 0,      // mode not selected
@@ -56,6 +57,7 @@ enum class Reason : uint8_t {
   AT_MAXIMUM,
   PUMP_LIMIT,    // the pump cannot deliver more flow in this installation
   LIMIT_AT_MAX,  // water limit still cutting power at maximum flow: a structural cause
+  OIL_RETURN,    // oil return, or the hold after it: flow held, samples discarded
 };
 
 inline const char* reason_text(Reason reason) {
@@ -86,6 +88,8 @@ inline const char* reason_text(Reason reason) {
       return "Pump at its limit";
     case Reason::LIMIT_AT_MAX:
       return "Water limit despite maximum flow - check maximum flow or hydraulics";
+    case Reason::OIL_RETURN:
+      return "Oil return - holding flow";
   }
   return "Off";
 }
@@ -93,6 +97,7 @@ inline const char* reason_text(Reason reason) {
 struct Unit {
   bool heating = false;      // compressor running in heating mode
   bool defrost = false;      // defrost flag set or 4-way valve reversed
+  bool oil_return = false;   // the outdoor unit runs its compressor oil return cycle
   bool temps_fresh = false;  // inlet and outlet recently received and valid
   float in_c = NAN;
   float out_c = NAN;
@@ -137,6 +142,8 @@ struct State {
   float unit_rise_sum_k[2] = {0.0f, 0.0f};
   float last_unit_rise_k[2] = {NAN, NAN};
   bool limit_timing = false;
+  bool oil_hold = false;
+  uint32_t oil_until_ms = 0;
   uint32_t limit_since_ms = 0;
   bool warning = false;
 };
@@ -221,6 +228,7 @@ inline void reset_cycle(State& state) {
   state.last_unit_rise_k[1] = NAN;
   state.limit_timing = false;
   state.warning = false;
+  state.oil_hold = false;
   state.ceiling_lph = NAN;
   state.unit_mask = 0;
   state.levels[0] = 0;
@@ -343,6 +351,28 @@ inline Output decide(const Input& in, const State& state) {
   }
   next.limit_timing = false;
   next.warning = false;
+
+  // Oil return is a protection cycle the outdoor unit owns: it runs the
+  // compressor its own way for a few minutes, so the temperature rise says
+  // nothing about the flow. Unlike defrost it keeps heating the water, so the
+  // flow simply stays where it is; only the samples are discarded, during the
+  // cycle and for the same hold Power House uses afterwards. Either unit counts,
+  // because on a Duo the water runs through both.
+  bool oil_return = false;
+  for (int i = 0; i < units; ++i) oil_return = oil_return || in.units[i].oil_return;
+  if (oil_return) {
+    next.oil_hold = true;
+    next.oil_until_ms = in.now_ms + kOilReturnHoldMs;
+  }
+  if (next.oil_hold) {
+    if (oil_return || before(in.now_ms, next.oil_until_ms)) {
+      clear_window(next);
+      next.reason = Reason::OIL_RETURN;
+      out.setpoint_lph = next.setpoint_lph;
+      return out;
+    }
+    next.oil_hold = false;  // never compare against this deadline again
+  }
   if (next.settling) {
     if (before(in.now_ms, next.settle_until_ms)) {
       next.reason = Reason::SETTLING;
@@ -351,7 +381,8 @@ inline Output decide(const Input& in, const State& state) {
     }
     next.settling = false;  // never compare against this deadline again
   }
-  if (next.reason == Reason::SETTLING || next.reason == Reason::WATER_LIMIT || next.reason == Reason::LIMIT_AT_MAX)
+  if (next.reason == Reason::SETTLING || next.reason == Reason::WATER_LIMIT || next.reason == Reason::LIMIT_AT_MAX ||
+      next.reason == Reason::OIL_RETURN)
     next.reason = Reason::ADJUSTING;
 
   // Average temperature rise per running heat pump. A Duo runs in series on one
