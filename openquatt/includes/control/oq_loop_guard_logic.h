@@ -64,6 +64,12 @@ struct Output {
   bool locked_out = false;
 };
 
+// A lockout deadline that never lands on zero, which means "not set".
+inline uint32_t arm_deadline(uint32_t now_ms, uint32_t duration_ms) {
+  const uint32_t until = now_ms + duration_ms;
+  return until == 0 ? 1u : until;
+}
+
 inline Output decide(const Input& in, const State& state) {
   Output out;
   out.next = state;
@@ -82,8 +88,13 @@ inline Output decide(const Input& in, const State& state) {
   out.settle_target_s = settle_ms / 1000u;
   out.reading_valid = out.flow_ok && held_ms >= settle_ms;
 
-  // Signed difference so the comparison survives the millis() wrap.
-  out.locked_out = static_cast<int32_t>(in.now_ms - state.lockout_until_ms) < 0;
+  // Zero means no lockout is set. Without that, the signed comparison below
+  // reads an unset (zero) deadline as "in the future" once millis() passes 2^31
+  // after 24.8 days of uptime, locking the guard out until its first release.
+  // An expired deadline is cleared for the same reason: compared again 24.8
+  // days later it would look current.
+  out.locked_out = state.lockout_until_ms != 0 && static_cast<int32_t>(in.now_ms - state.lockout_until_ms) < 0;
+  if (state.lockout_until_ms != 0 && !out.locked_out) out.next.lockout_until_ms = 0;
   out.recheck_remaining_min =
       out.locked_out ? static_cast<uint32_t>(state.lockout_until_ms - in.now_ms) / 60000u + 1u : 0u;
 
@@ -96,7 +107,7 @@ inline Output decide(const Input& in, const State& state) {
   if (!out.permitted) {
     // Without this the guard re-engages on the very next pass: flow never
     // stopped, so flow_ok_since_ms survives and the reading is still settled.
-    if (state.active && fault) out.next.lockout_until_ms = in.now_ms + kProtectionBackoffMs;
+    if (state.active && fault) out.next.lockout_until_ms = arm_deadline(in.now_ms, kProtectionBackoffMs);
     out.next.active = false;
   } else {
     // Hold the release threshold above the engage threshold whatever the user
@@ -113,7 +124,8 @@ inline Output decide(const Input& in, const State& state) {
       out.next.active = false;
       // The stagnant reading falls back below the engage threshold within
       // minutes, so hold off re-checking or the guard restarts on every pass.
-      out.next.lockout_until_ms = in.now_ms + static_cast<uint32_t>(std::max(0.0f, in.recheck_min) * 60000.0f);
+      out.next.lockout_until_ms =
+          arm_deadline(in.now_ms, static_cast<uint32_t>(std::max(0.0f, in.recheck_min) * 60000.0f));
     }
   }
 
