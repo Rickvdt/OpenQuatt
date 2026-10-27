@@ -86,6 +86,50 @@ number:
     initial_value: 1200
     entity_category: config
 
+  # Pacing. The logic keeps each value inside bounds that stay slow and stable
+  # (1-30 min, 10-200 L/h, 0.1-1.0 K), so a bad setting cannot make it hunt.
+  - platform: template
+    id: oq_flow_dt_step_interval_min
+    name: "Flow Delta T Step Interval"
+    icon: mdi:timer-outline
+    unit_of_measurement: "min"
+    mode: box
+    min_value: 1
+    max_value: 30
+    step: 1
+    restore_value: true
+    optimistic: true
+    initial_value: 5
+    entity_category: config
+
+  - platform: template
+    id: oq_flow_dt_max_step_lph
+    name: "Flow Delta T Max Step"
+    icon: mdi:stairs
+    unit_of_measurement: "L/h"
+    mode: box
+    min_value: 10
+    max_value: 200
+    step: 10
+    restore_value: true
+    optimistic: true
+    initial_value: 50
+    entity_category: config
+
+  - platform: template
+    id: oq_flow_dt_deadband_k
+    name: "Flow Delta T Deadband"
+    icon: mdi:arrow-collapse-vertical
+    unit_of_measurement: "K"
+    mode: box
+    min_value: 0.1
+    max_value: 1.0
+    step: 0.1
+    restore_value: true
+    optimistic: true
+    initial_value: 0.3
+    entity_category: config
+
 sensor:
   # Average temperature rise per running heat pump over the last step.
   - platform: template

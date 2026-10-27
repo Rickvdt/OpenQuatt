@@ -110,6 +110,9 @@ inline float apply(float selected_setpoint_lph, int cm_code) {
   in.target_k = id(oq_flow_dt_target_k).state;
   in.min_lph = id(oq_flow_dt_min_lph).state;
   in.max_lph = id(oq_flow_dt_max_lph).state;
+  in.step_interval_min = id(oq_flow_dt_step_interval_min).state;
+  in.max_step_lph = id(oq_flow_dt_max_step_lph).state;
+  in.deadband_k = id(oq_flow_dt_deadband_k).state;
   in.lowflow_threshold_lph = id(oq_flow_dt_lowflow_threshold_lph);
   // Quatt's own fixed flow for the version chosen at installation: the floor
   // for the maximum. V1 is assumed to match V1.5.

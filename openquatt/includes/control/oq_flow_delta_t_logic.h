@@ -26,16 +26,18 @@ namespace oq_flow_delta_t {
 
 // Pacing is deliberately slow. The gain is in steady operation and heat demand
 // changes over hours, so a slow loop loses almost nothing while staying well
-// clear of the 10 s flow PI, the compressor and slow floor heating.
-constexpr uint32_t kStepIntervalMs = 120000u;  // at most one step per 2 minutes
-constexpr uint32_t kSettleMs = 300000u;        // after a start, or a unit joining or leaving
-constexpr uint32_t kDefrostHoldMs = 600000u;   // after any defrost
-constexpr int kMinSamples = 6;                 // at least a minute of 10 s samples per step
-constexpr float kDeadbandK = 0.3f;             // ignore differences at sensor-error level
-constexpr float kGain = 0.5f;                  // move half of the gap per step
-constexpr float kMaxStepLph = 100.0f;          // and never more than this per step
-constexpr float kLowFlowMarginLph = 50.0f;     // floor kept above the low-flow fault threshold
-constexpr float kShortfallLph = 75.0f;         // flow this far below the setpoint: pump at its limit
+// clear of the 10 s flow PI, the compressor and slow floor heating. The step
+// interval, the step size and the dead band are configurable; these are the
+// defaults, and pacing() keeps any configured value inside sane bounds.
+constexpr float kDefaultStepIntervalMin = 5.0f;  // at most one step per 5 minutes
+constexpr float kDefaultMaxStepLph = 50.0f;      // never more than this per step
+constexpr float kDefaultDeadbandK = 0.3f;        // ignore differences at sensor-error level
+constexpr uint32_t kSettleMs = 300000u;          // after a start, or a unit joining or leaving
+constexpr uint32_t kDefrostHoldMs = 600000u;     // after any defrost
+constexpr int kMinSamples = 6;                   // at least a minute of 10 s samples per step
+constexpr float kGain = 0.5f;                    // move half of the gap per step
+constexpr float kLowFlowMarginLph = 50.0f;       // floor kept above the low-flow fault threshold
+constexpr float kShortfallLph = 75.0f;           // flow this far below the setpoint: pump at its limit
 constexpr float kCeilingMarginLph = 25.0f;
 constexpr float kMinUsableRiseK = 0.2f;     // below this a sample says nothing about the flow
 constexpr uint32_t kWarnAfterMs = 300000u;  // water limit still cutting power after this at maximum flow
@@ -110,8 +112,11 @@ struct Input {
   float max_lph = 1200.0f;
   float lowflow_threshold_lph = 400.0f;
   float standard_flow_lph = 800.0f;  // Quatt's own fixed flow for the configured version
-  bool water_limit_active = false;   // water temperature protection is cutting power
-  bool flow_fault = false;           // low-flow fault active
+  float step_interval_min = kDefaultStepIntervalMin;
+  float max_step_lph = kDefaultMaxStepLph;
+  float deadband_k = kDefaultDeadbandK;
+  bool water_limit_active = false;  // water temperature protection is cutting power
+  bool flow_fault = false;          // low-flow fault active
 };
 
 struct State {
@@ -152,6 +157,26 @@ struct Output {
 inline bool before(uint32_t now_ms, uint32_t until_ms) { return static_cast<int32_t>(now_ms - until_ms) < 0; }
 
 inline float clampf(float value, float low, float high) { return value < low ? low : (value > high ? high : value); }
+
+struct Pacing {
+  uint32_t step_interval_ms = 0;
+  float max_step_lph = 0.0f;
+  float deadband_k = 0.0f;
+};
+
+// The configured pacing, held to bounds that keep the loop slow and stable: a
+// step interval of zero would hunt, a step of zero would freeze, and a dead
+// band under sensor resolution would chase noise. A missing value falls back
+// to its default.
+inline Pacing pacing(const Input& in) {
+  Pacing out;
+  const float minutes =
+      isfinite(in.step_interval_min) ? clampf(in.step_interval_min, 1.0f, 30.0f) : kDefaultStepIntervalMin;
+  out.step_interval_ms = static_cast<uint32_t>(minutes * 60000.0f);
+  out.max_step_lph = isfinite(in.max_step_lph) ? clampf(in.max_step_lph, 10.0f, 200.0f) : kDefaultMaxStepLph;
+  out.deadband_k = isfinite(in.deadband_k) ? clampf(in.deadband_k, 0.1f, 1.0f) : kDefaultDeadbandK;
+  return out;
+}
 
 struct Band {
   float min_lph = NAN;
@@ -345,7 +370,8 @@ inline Output decide(const Input& in, const State& state) {
     }
   }
 
-  if (static_cast<uint32_t>(in.now_ms - next.last_step_ms) < kStepIntervalMs || next.rise_count < kMinSamples) {
+  const Pacing pace = pacing(in);
+  if (static_cast<uint32_t>(in.now_ms - next.last_step_ms) < pace.step_interval_ms || next.rise_count < kMinSamples) {
     out.setpoint_lph = next.setpoint_lph;
     return out;
   }
@@ -365,7 +391,7 @@ inline Output decide(const Input& in, const State& state) {
   const float step_upper =
       isfinite(next.ceiling_lph) ? fmaxf(limits.min_lph, fminf(limits.max_lph, next.ceiling_lph)) : upper;
 
-  if (fabsf(average_k - in.target_k) <= kDeadbandK) {
+  if (fabsf(average_k - in.target_k) <= pace.deadband_k) {
     next.setpoint_lph = clampf(next.setpoint_lph, limits.min_lph, step_upper);
     next.reason = Reason::ON_TARGET;
     out.setpoint_lph = next.setpoint_lph;
@@ -376,7 +402,7 @@ inline Output decide(const Input& in, const State& state) {
   // would give the target follows directly from the measurement.
   const float desired_lph = in.flow_lph * average_k / in.target_k;
   float step = kGain * (desired_lph - next.setpoint_lph);
-  step = clampf(step, -kMaxStepLph, kMaxStepLph);
+  step = clampf(step, -pace.max_step_lph, pace.max_step_lph);
   next.setpoint_lph = clampf(next.setpoint_lph + step, limits.min_lph, step_upper);
 
   if (next.setpoint_lph >= step_upper - 0.5f)

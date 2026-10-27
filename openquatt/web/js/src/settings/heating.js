@@ -184,6 +184,9 @@ import { getCurvePointDraft, getSimpleCurveDraft } from "../core/simple-curve.js
         renderSettingsNumberField("flowDeltaTTarget", t("settingsHeating.flowDeltaTTargetTitle"), t("settingsHeating.flowDeltaTTargetCopy")),
         renderSettingsNumberField("flowDeltaTMinFlow", t("settingsHeating.flowDeltaTMinTitle"), t("settingsHeating.flowDeltaTMinCopy")),
         renderSettingsNumberField("flowDeltaTMaxFlow", t("settingsHeating.flowDeltaTMaxTitle"), t("settingsHeating.flowDeltaTMaxCopy")),
+        renderSettingsNumberField("flowDeltaTStepInterval", t("settingsHeating.flowDeltaTIntervalTitle"), t("settingsHeating.flowDeltaTIntervalCopy")),
+        renderSettingsNumberField("flowDeltaTMaxStep", t("settingsHeating.flowDeltaTStepTitle"), t("settingsHeating.flowDeltaTStepCopy")),
+        renderSettingsNumberField("flowDeltaTDeadband", t("settingsHeating.flowDeltaTDeadbandTitle"), t("settingsHeating.flowDeltaTDeadbandCopy")),
         hasEntity("flowDeltaTStatus")
           ? renderSettingsStaticField("flowDeltaTStatus", t("settingsHeating.flowDeltaTStatusTitle"), t("settingsHeating.flowDeltaTStatusCopy"), getSettingsTextStatValue("flowDeltaTStatus"))
           : "",

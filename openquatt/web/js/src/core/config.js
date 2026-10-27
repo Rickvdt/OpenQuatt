@@ -199,6 +199,9 @@
     ["flowDeltaTTarget", DOMAIN_NUMBER, "Flow Delta T Target"],
     ["flowDeltaTMinFlow", DOMAIN_NUMBER, "Flow Delta T Minimum Flow"],
     ["flowDeltaTMaxFlow", DOMAIN_NUMBER, "Flow Delta T Maximum Flow"],
+    ["flowDeltaTStepInterval", DOMAIN_NUMBER, "Flow Delta T Step Interval"],
+    ["flowDeltaTMaxStep", DOMAIN_NUMBER, "Flow Delta T Max Step"],
+    ["flowDeltaTDeadband", DOMAIN_NUMBER, "Flow Delta T Deadband"],
     ["flowOutputIpwm", DOMAIN_SENSOR, "Flow Output iPWM"],
     ["compressorStarts2hWarningLimit", DOMAIN_NUMBER, "Compressor starts 2h warning limit"],
     ["compressorStarts72hWarningLimit", DOMAIN_NUMBER, "Compressor starts 72h warning limit"],
@@ -872,6 +875,9 @@
     "flowDeltaTTarget",
     "flowDeltaTMinFlow",
     "flowDeltaTMaxFlow",
+    "flowDeltaTStepInterval",
+    "flowDeltaTMaxStep",
+    "flowDeltaTDeadband",
     "flowDeltaTStatus",
   ];
   export const FLOW_TUNING_KEYS = ["flowKp", "flowKi"];
@@ -2246,7 +2252,7 @@
     {
       id: "flow",
       labelKey: "backupSections.flow",
-      keys: ["flowControlMode", "flowSetpoint", "coolingFlowSetpoint", "manualIpwm", "flowDeltaTTarget", "flowDeltaTMinFlow", "flowDeltaTMaxFlow", "flowKp", "flowKi"],
+      keys: ["flowControlMode", "flowSetpoint", "coolingFlowSetpoint", "manualIpwm", "flowDeltaTTarget", "flowDeltaTMinFlow", "flowDeltaTMaxFlow", "flowDeltaTStepInterval", "flowDeltaTMaxStep", "flowDeltaTDeadband", "flowKp", "flowKi"],
     },
     {
       id: "cooling",

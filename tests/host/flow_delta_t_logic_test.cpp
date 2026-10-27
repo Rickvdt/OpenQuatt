@@ -30,6 +30,10 @@ Input heating(uint32_t now_ms, float flow_lph, float rise_k) {
   in.min_lph = 500.0f;
   in.max_lph = 1200.0f;
   in.lowflow_threshold_lph = 400.0f;
+  // The behaviour tests step every two minutes by up to 100 L/h; the defaults
+  // (five minutes, 50 L/h) are covered by test_pacing_defaults_and_configuration.
+  in.step_interval_min = 2.0f;
+  in.max_step_lph = 100.0f;
   return in;
 }
 
@@ -328,6 +332,57 @@ void test_duo_reports_the_rise_per_unit() {
   assert(near(out.next.last_unit_rise_k[0], 2.0f, 0.01f) && isnan(out.next.last_unit_rise_k[1]));
 }
 
+// Ticks with the default pacing (5 min, 50 L/h) and a given dead band.
+Output run_default(State& state, uint32_t& now_ms, int ticks, float rise_k, float deadband_k = kDefaultDeadbandK) {
+  Output out;
+  for (int i = 0; i < ticks; ++i) {
+    Input in = heating(now_ms, isfinite(state.setpoint_lph) ? state.setpoint_lph : 800.0f, rise_k);
+    in.step_interval_min = kDefaultStepIntervalMin;
+    in.max_step_lph = kDefaultMaxStepLph;
+    in.deadband_k = deadband_k;
+    out = decide(in, state);
+    state = out.next;
+    now_ms += kTickMs;
+  }
+  return out;
+}
+
+void test_pacing_defaults_and_configuration() {
+  // Defaults: one step per five minutes, at most 50 L/h, a 0.3 K dead band.
+  Input in;
+  Pacing pace = pacing(in);
+  assert(pace.step_interval_ms == 300000u && pace.max_step_lph == 50.0f && near(pace.deadband_k, 0.3f, 0.001f));
+  // Out-of-range values are held to bounds; a missing one falls back to its default.
+  in.step_interval_min = 0.0f;
+  in.max_step_lph = 1000.0f;
+  in.deadband_k = NAN;
+  pace = pacing(in);
+  assert(pace.step_interval_ms == 60000u && pace.max_step_lph == 200.0f && near(pace.deadband_k, 0.3f, 0.001f));
+
+  // With the defaults the first step lands five minutes in, once a minute of
+  // samples is gathered after settling, and moves 50 L/h.
+  State state;
+  uint32_t now = 1000;
+  Output out = run_default(state, now, 36, 1.5f);
+  assert(near(out.setpoint_lph, 750.0f));
+  // Nothing more until the next five minutes have passed...
+  out = run_default(state, now, 29, 1.5f);
+  assert(near(out.setpoint_lph, 750.0f));
+  // ...then the next 50 L/h step.
+  out = run_default(state, now, 1, 1.5f);
+  assert(near(out.setpoint_lph, 700.0f));
+
+  // A wider dead band holds where the default would adjust: 3.4 K is 0.4 K off.
+  State held;
+  now = 1000;
+  out = run_default(held, now, 36, 3.4f, 0.5f);
+  assert(out.next.reason == Reason::ON_TARGET && out.setpoint_lph == 800.0f);
+  State moved;
+  now = 1000;
+  out = run_default(moved, now, 36, 3.4f);
+  assert(out.next.reason != Reason::ON_TARGET && out.setpoint_lph > 800.0f);
+}
+
 void test_reason_text_is_defined_for_every_reason() {
   for (int r = 0; r <= static_cast<int>(Reason::LIMIT_AT_MAX); ++r) {
     const char* text = reason_text(static_cast<Reason>(r));
@@ -354,6 +409,7 @@ int main() {
   test_maximum_follows_the_configured_quatt_version();
   test_warning_when_the_water_limit_persists_at_maximum_flow();
   test_duo_reports_the_rise_per_unit();
+  test_pacing_defaults_and_configuration();
   test_reason_text_is_defined_for_every_reason();
   return 0;
 }
