@@ -251,8 +251,85 @@ void test_long_uptime_does_not_freeze_the_controller() {
   assert(out.setpoint_lph < 800.0f);
 }
 
+void test_maximum_follows_the_configured_quatt_version() {
+  // V2 runs 1000 L/h from the factory: a maximum of 900 is raised to it even
+  // though the configured Flow Setpoint is only 800.
+  Input in = heating(0, 800.0f, 6.0f);
+  in.max_lph = 900.0f;
+  in.standard_flow_lph = 1000.0f;
+  Band limits = band(in);
+  assert(limits.valid && limits.max_lph == 1000.0f);
+  // V1.5 (800 L/h) leaves the same 900 maximum alone.
+  in.standard_flow_lph = 800.0f;
+  limits = band(in);
+  assert(limits.max_lph == 900.0f);
+  // A missing standard flow never invalidates the band.
+  in.standard_flow_lph = NAN;
+  limits = band(in);
+  assert(limits.valid && limits.max_lph == 900.0f);
+}
+
+void test_warning_when_the_water_limit_persists_at_maximum_flow() {
+  State state;
+  uint32_t now = 1000;
+  run(state, now, 31, 3.0f);
+  Output out;
+  // Four minutes of the protection cutting power: maximum flow, no warning yet.
+  for (int i = 0; i < 24; ++i) {
+    Input in = heating(now, 1200.0f, 3.0f);
+    in.water_limit_active = true;
+    out = decide(in, state);
+    state = out.next;
+    now += kTickMs;
+  }
+  assert(out.setpoint_lph == 1200.0f && !out.warning && out.next.reason == Reason::WATER_LIMIT);
+  // Still cutting power after five minutes at maximum: more water did not help.
+  for (int i = 0; i < 7; ++i) {
+    Input in = heating(now, 1200.0f, 3.0f);
+    in.water_limit_active = true;
+    out = decide(in, state);
+    state = out.next;
+    now += kTickMs;
+  }
+  assert(out.warning && out.next.reason == Reason::LIMIT_AT_MAX);
+  // The protection relaxes: the warning clears at once.
+  out = decide(heating(now, 1200.0f, 3.0f), state);
+  assert(!out.warning && !out.next.warning);
+}
+
+void test_duo_reports_the_rise_per_unit() {
+  State state;
+  Input in = heating(1000, 800.0f, 2.0f);
+  in.unit_count = 2;
+  in.units[1].heating = true;
+  in.units[1].temps_fresh = true;
+  in.units[1].in_c = 32.0f;
+  in.units[1].out_c = 36.0f;
+  in.units[1].level = 3;
+  uint32_t now = 1000;
+  Output out;
+  for (int i = 0; i < 30 + 12; ++i) {
+    in.now_ms = now;
+    out = decide(in, state);
+    state = out.next;
+    now += kTickMs;
+  }
+  assert(near(out.next.last_unit_rise_k[0], 2.0f, 0.01f));
+  assert(near(out.next.last_unit_rise_k[1], 4.0f, 0.01f));
+  assert(near(out.next.last_rise_k, 3.0f, 0.01f));
+  // HP2 stops: only HP1 is reported after the next step.
+  in.units[1].heating = false;
+  for (int i = 0; i < 30 + 12; ++i) {
+    in.now_ms = now;
+    out = decide(in, state);
+    state = out.next;
+    now += kTickMs;
+  }
+  assert(near(out.next.last_unit_rise_k[0], 2.0f, 0.01f) && isnan(out.next.last_unit_rise_k[1]));
+}
+
 void test_reason_text_is_defined_for_every_reason() {
-  for (int r = 0; r <= static_cast<int>(Reason::PUMP_LIMIT); ++r) {
+  for (int r = 0; r <= static_cast<int>(Reason::LIMIT_AT_MAX); ++r) {
     const char* text = reason_text(static_cast<Reason>(r));
     assert(text != nullptr && text[0] != '\0');
   }
@@ -274,6 +351,9 @@ int main() {
   test_a_unit_joining_resettles_but_a_level_change_does_not();
   test_pump_limit_stops_asking_for_more();
   test_long_uptime_does_not_freeze_the_controller();
+  test_maximum_follows_the_configured_quatt_version();
+  test_warning_when_the_water_limit_persists_at_maximum_flow();
+  test_duo_reports_the_rise_per_unit();
   test_reason_text_is_defined_for_every_reason();
   return 0;
 }

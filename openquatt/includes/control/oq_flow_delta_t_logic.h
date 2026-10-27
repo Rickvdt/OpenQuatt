@@ -37,7 +37,8 @@ constexpr float kMaxStepLph = 100.0f;          // and never more than this per s
 constexpr float kLowFlowMarginLph = 50.0f;     // floor kept above the low-flow fault threshold
 constexpr float kShortfallLph = 75.0f;         // flow this far below the setpoint: pump at its limit
 constexpr float kCeilingMarginLph = 25.0f;
-constexpr float kMinUsableRiseK = 0.2f;  // below this a sample says nothing about the flow
+constexpr float kMinUsableRiseK = 0.2f;     // below this a sample says nothing about the flow
+constexpr uint32_t kWarnAfterMs = 300000u;  // water limit still cutting power after this at maximum flow
 
 enum class Reason : uint8_t {
   OFF = 0,      // mode not selected
@@ -51,7 +52,8 @@ enum class Reason : uint8_t {
   ADJUSTING,
   AT_MINIMUM,
   AT_MAXIMUM,
-  PUMP_LIMIT,  // the pump cannot deliver more flow in this installation
+  PUMP_LIMIT,    // the pump cannot deliver more flow in this installation
+  LIMIT_AT_MAX,  // water limit still cutting power at maximum flow: a structural cause
 };
 
 inline const char* reason_text(Reason reason) {
@@ -80,6 +82,8 @@ inline const char* reason_text(Reason reason) {
       return "At maximum flow";
     case Reason::PUMP_LIMIT:
       return "Pump at its limit";
+    case Reason::LIMIT_AT_MAX:
+      return "Water limit despite maximum flow - check maximum flow or hydraulics";
   }
   return "Off";
 }
@@ -105,8 +109,9 @@ struct Input {
   float min_lph = 500.0f;
   float max_lph = 1200.0f;
   float lowflow_threshold_lph = 400.0f;
-  bool water_limit_active = false;  // water temperature protection is cutting power
-  bool flow_fault = false;          // low-flow fault active
+  float standard_flow_lph = 800.0f;  // Quatt's own fixed flow for the configured version
+  bool water_limit_active = false;   // water temperature protection is cutting power
+  bool flow_fault = false;           // low-flow fault active
 };
 
 struct State {
@@ -124,6 +129,11 @@ struct State {
   float ceiling_lph = NAN;
   Reason reason = Reason::OFF;
   float last_rise_k = NAN;
+  float unit_rise_sum_k[2] = {0.0f, 0.0f};
+  float last_unit_rise_k[2] = {NAN, NAN};
+  bool limit_timing = false;
+  uint32_t limit_since_ms = 0;
+  bool warning = false;
 };
 
 struct Output {
@@ -133,6 +143,7 @@ struct Output {
   int counted_units = 0;
   float min_lph = NAN;
   float max_lph = NAN;
+  bool warning = false;  // water limit still cutting power at maximum flow
 };
 
 // True while now is before until. Only meaningful for a deadline that was
@@ -149,27 +160,42 @@ struct Band {
 };
 
 // The usable flow band. The maximum never sits below the normal Flow Setpoint,
-// so at full power this mode never moves less water than the fixed setpoint
-// would. A lower maximum would push the supply up until the water temperature
-// protection cut power, silently and exactly when it is coldest. The minimum
-// stays clear of the low-flow fault and below the maximum.
+// nor below Quatt's own fixed flow for the configured version, so at full power
+// this mode never moves less water than either would. A lower maximum would
+// push the supply up until the water temperature protection cut power,
+// silently and exactly when it is coldest. The minimum stays clear of the
+// low-flow fault and below the maximum. Settings that contradict each other are
+// corrected into this band rather than refused.
 inline Band band(const Input& in) {
   Band out;
   if (!isfinite(in.base_setpoint_lph) || in.base_setpoint_lph <= 0.0f || !isfinite(in.min_lph) ||
       !isfinite(in.max_lph) || !isfinite(in.lowflow_threshold_lph))
     return out;
-  out.max_lph = fmaxf(in.max_lph, in.base_setpoint_lph);
+  const float standard_lph = isfinite(in.standard_flow_lph) ? in.standard_flow_lph : 0.0f;
+  out.max_lph = fmaxf(fmaxf(in.max_lph, in.base_setpoint_lph), standard_lph);
   out.min_lph = fminf(fmaxf(in.min_lph, in.lowflow_threshold_lph + kLowFlowMarginLph), out.max_lph);
   out.valid = true;
   return out;
+}
+
+// Start a fresh averaging window; per-unit sums always move with the average.
+inline void clear_window(State& state) {
+  state.rise_sum_k = 0.0f;
+  state.rise_count = 0;
+  state.unit_rise_sum_k[0] = 0.0f;
+  state.unit_rise_sum_k[1] = 0.0f;
 }
 
 inline void reset_cycle(State& state) {
   state.active = false;
   state.setpoint_lph = NAN;
   state.settling = false;
-  state.rise_sum_k = 0.0f;
-  state.rise_count = 0;
+  clear_window(state);
+  state.last_rise_k = NAN;
+  state.last_unit_rise_k[0] = NAN;
+  state.last_unit_rise_k[1] = NAN;
+  state.limit_timing = false;
+  state.warning = false;
   state.ceiling_lph = NAN;
   state.unit_mask = 0;
   state.levels[0] = 0;
@@ -240,8 +266,7 @@ inline Output decide(const Input& in, const State& state) {
     next.last_step_ms = in.now_ms;
     next.unit_mask = mask;
     for (int i = 0; i < 2; ++i) next.levels[i] = in.units[i].level;
-    next.rise_sum_k = 0.0f;
-    next.rise_count = 0;
+    clear_window(next);
     next.ceiling_lph = NAN;
     next.reason = Reason::SETTLING;
   } else if (mask != next.unit_mask) {
@@ -250,8 +275,7 @@ inline Output decide(const Input& in, const State& state) {
     next.unit_mask = mask;
     next.settling = true;
     next.settle_until_ms = in.now_ms + kSettleMs;
-    next.rise_sum_k = 0.0f;
-    next.rise_count = 0;
+    clear_window(next);
     next.reason = Reason::SETTLING;
   }
   bool level_changed = false;
@@ -260,8 +284,7 @@ inline Output decide(const Input& in, const State& state) {
     // A level change only restarts the averaging window. A full settle on every
     // level step would starve the controller under Power House modulation.
     for (int i = 0; i < 2; ++i) next.levels[i] = in.units[i].level;
-    next.rise_sum_k = 0.0f;
-    next.rise_count = 0;
+    clear_window(next);
   }
 
   // The live band may have moved under a running cycle.
@@ -279,12 +302,22 @@ inline Output decide(const Input& in, const State& state) {
     next.setpoint_lph = limits.max_lph;
     next.settling = true;
     next.settle_until_ms = in.now_ms + kSettleMs;
-    next.rise_sum_k = 0.0f;
-    next.rise_count = 0;
-    next.reason = Reason::WATER_LIMIT;
+    clear_window(next);
+    // Still cutting power once the flow has had time to reach the maximum:
+    // more water did not help, so the cause is structural - a maximum set too
+    // low, or an installation that cannot take more water.
+    if (!next.limit_timing) {
+      next.limit_timing = true;
+      next.limit_since_ms = in.now_ms;
+    }
+    next.warning = static_cast<uint32_t>(in.now_ms - next.limit_since_ms) >= kWarnAfterMs;
+    next.reason = next.warning ? Reason::LIMIT_AT_MAX : Reason::WATER_LIMIT;
+    out.warning = next.warning;
     out.setpoint_lph = next.setpoint_lph;
     return out;
   }
+  next.limit_timing = false;
+  next.warning = false;
   if (next.settling) {
     if (before(in.now_ms, next.settle_until_ms)) {
       next.reason = Reason::SETTLING;
@@ -293,7 +326,8 @@ inline Output decide(const Input& in, const State& state) {
     }
     next.settling = false;  // never compare against this deadline again
   }
-  if (next.reason == Reason::SETTLING || next.reason == Reason::WATER_LIMIT) next.reason = Reason::ADJUSTING;
+  if (next.reason == Reason::SETTLING || next.reason == Reason::WATER_LIMIT || next.reason == Reason::LIMIT_AT_MAX)
+    next.reason = Reason::ADJUSTING;
 
   // Average temperature rise per running heat pump. A Duo runs in series on one
   // shared flow, so the flow cannot put each unit on its own target; the
@@ -306,6 +340,9 @@ inline Output decide(const Input& in, const State& state) {
   if (rise_k >= kMinUsableRiseK) {
     next.rise_sum_k += rise_k;
     next.rise_count++;
+    for (int i = 0; i < units; ++i) {
+      if (in.units[i].heating) next.unit_rise_sum_k[i] += in.units[i].out_c - in.units[i].in_c;
+    }
   }
 
   if (static_cast<uint32_t>(in.now_ms - next.last_step_ms) < kStepIntervalMs || next.rise_count < kMinSamples) {
@@ -313,10 +350,12 @@ inline Output decide(const Input& in, const State& state) {
     return out;
   }
 
-  const float average_k = next.rise_sum_k / static_cast<float>(next.rise_count);
+  const float samples = static_cast<float>(next.rise_count);
+  const float average_k = next.rise_sum_k / samples;
   next.last_rise_k = average_k;
-  next.rise_sum_k = 0.0f;
-  next.rise_count = 0;
+  for (int i = 0; i < 2; ++i)
+    next.last_unit_rise_k[i] = (i < units && in.units[i].heating) ? next.unit_rise_sum_k[i] / samples : NAN;
+  clear_window(next);
   next.last_step_ms = in.now_ms;
 
   // The pump could not follow the last setpoint: this is the ceiling of this

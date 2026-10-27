@@ -21,9 +21,12 @@
 #   - The maximum never sits below the normal Flow Setpoint, so at full power
 #     this mode never moves less water than the fixed setpoint would.
 #   - The minimum stays above the low-flow fault threshold plus a margin.
+#   - The maximum also never sits below Quatt's own fixed flow for the version
+#     chosen at installation (Quatt Hybrid version: 800 L/h, V2 1000 L/h).
 #   - Defrost, a low-flow fault or missing temperatures fall back to the normal
 #     Flow Setpoint. When the water temperature protection cuts power, the flow
-#     goes straight to the maximum first.
+#     goes straight to the maximum first; if the protection is still cutting
+#     power five minutes later, Flow Delta T Warning turns on.
 #
 # What this package DOES NOT do:
 #   - Does not touch cooling: cooling keeps its own fixed setpoint
@@ -105,6 +108,18 @@ sensor:
     state_class: measurement
     entity_category: diagnostic
     update_interval: never
+
+binary_sensor:
+  # The water temperature protection is still cutting power although the flow
+  # has been at its maximum for five minutes: more water did not help, so the
+  # cause is structural - a maximum set too low, or an installation that cannot
+  # take more water.
+  - platform: template
+    id: oq_flow_dt_warning
+    name: "Flow Delta T Warning"
+    icon: mdi:alert-outline
+    device_class: problem
+    entity_category: diagnostic
 
 text_sensor:
   # What the mode is doing and why, which is otherwise opaque: it may be off,

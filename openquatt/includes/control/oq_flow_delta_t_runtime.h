@@ -42,12 +42,22 @@ inline void publish_(const oq_flow_delta_t::Output& out) {
   static std::string last_status;
   static float last_rise = NAN;
   static float last_setpoint = NAN;
+  static bool have_warning = false;
+  static bool last_warning = false;
 
-  char buf[96];
+  // The rise per running heat pump next to the average that is steered on, so
+  // a Duo shows how far the two units sit apart.
+  char buf[128];
   const char* reason = oq_flow_delta_t::reason_text(out.next.reason);
+  const float* unit = out.next.last_unit_rise_k;
   if (out.controlling && isfinite(out.next.last_rise_k)) {
-    snprintf(buf, sizeof(buf), "%s - rise %.1f K, %d unit%s, %.0f L/h", reason, out.next.last_rise_k, out.counted_units,
-             out.counted_units == 1 ? "" : "s", out.setpoint_lph);
+    if (isfinite(unit[0]) && isfinite(unit[1])) {
+      snprintf(buf, sizeof(buf), "%s - HP1 %.1f K, HP2 %.1f K (avg %.1f K), %.0f L/h", reason, unit[0], unit[1],
+               out.next.last_rise_k, out.setpoint_lph);
+    } else {
+      snprintf(buf, sizeof(buf), "%s - HP%d %.1f K, %.0f L/h", reason, isfinite(unit[1]) ? 2 : 1, out.next.last_rise_k,
+               out.setpoint_lph);
+    }
   } else {
     snprintf(buf, sizeof(buf), "%s", reason);
   }
@@ -66,6 +76,11 @@ inline void publish_(const oq_flow_delta_t::Output& out) {
       (isfinite(setpoint) && fabsf(setpoint - last_setpoint) >= 1.0f)) {
     last_setpoint = setpoint;
     id(oq_flow_dt_setpoint_lph).publish_state(setpoint);
+  }
+  if (!have_warning || out.warning != last_warning) {
+    have_warning = true;
+    last_warning = out.warning;
+    id(oq_flow_dt_warning).publish_state(out.warning);
   }
 }
 
@@ -96,6 +111,10 @@ inline float apply(float selected_setpoint_lph, int cm_code) {
   in.min_lph = id(oq_flow_dt_min_lph).state;
   in.max_lph = id(oq_flow_dt_max_lph).state;
   in.lowflow_threshold_lph = id(oq_flow_dt_lowflow_threshold_lph);
+  // Quatt's own fixed flow for the version chosen at installation: the floor
+  // for the maximum. V1 is assumed to match V1.5.
+  const bool v2 = id(hp_generation).has_state() && id(hp_generation).current_option() == "V2";
+  in.standard_flow_lph = v2 ? 1000.0f : 800.0f;
   in.water_limit_active = id(oq_water_temp_limit_factor) < 0.999f;
   in.flow_fault = id(oq_lowflow_fault_active);
 
