@@ -11,7 +11,10 @@ export const WEB_BUNDLE_BUDGETS = [
     // Historical heating-stop reasons and both locale catalogues add ~10.6 kB raw.
     // Aux relay (R2) run-on settings, copy in both locales and legacy-backup migration add ~2.2 kB raw / ~0.7 kB gzip.
     // The existing relative gzip growth limit remains unchanged.
-    raw: 1_334_500,
+    // Fork: Delta T flow control settings, status and copy in both locales add
+    // 2,184 B raw / 759 B gzip; raised by exactly that so upstream keeps the
+    // same headroom it set for itself.
+    raw: 1_336_684,
     gzipBaselineCeiling: 362_000,
   },
   // Includes passive-learning cards and the curve editor: ~207.9 kB raw.
