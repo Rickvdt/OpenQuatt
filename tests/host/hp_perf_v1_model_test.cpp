@@ -87,9 +87,10 @@ void assert_clamped_boundaries() {
         const int supply_index = supply <= 35.0f ? 0 : oq_perf_v1::N_SUP - 1;
         assert_value(oq_perf_v1::interp_power_th_w(level, outside, supply),
                      oq_perf_v1::P_th_W[ambient_index][supply_index][level - 1]);
-        assert_value(
-            oq_perf_v1::interp_cop(level, outside, supply),
-            supply < 35.0f ? floor_cop(ambient_index, level) : oq_perf_v1::COP[ambient_index][supply_index][level - 1]);
+        assert_value(oq_perf_v1::interp_cop(level, outside, supply),
+                     supply < 35.0f
+                         ? floor_cop(ambient_index, level) * oq_perf_v1::low_lift_factor(level, outside, 25.0f)
+                         : oq_perf_v1::COP[ambient_index][supply_index][level - 1]);
       }
     }
   }
@@ -110,9 +111,13 @@ void assert_low_supply_cop_extrapolation() {
       assert(cop35 > oq_perf_v1::COP[ambient][1][level - 1]);
       assert_value(oq_perf_v1::interp_cop(level, outside_c, 35.0f), cop35);
       assert(std::fabs(oq_perf_v1::interp_cop(level, outside_c, std::nextafter(35.0f, 0.0f)) - cop35) < 0.001f);
-      assert_value(oq_perf_v1::interp_cop(level, outside_c, 30.0f), (cop35 + floor_cop(ambient, level)) / 2.0f);
-      assert_value(oq_perf_v1::interp_cop(level, outside_c, 25.0f), floor_cop(ambient, level));
-      assert_value(oq_perf_v1::interp_cop(level, outside_c, 15.0f), floor_cop(ambient, level));
+      const auto factor = [&](float supply) { return oq_perf_v1::low_lift_factor(level, outside_c, supply); };
+      assert_value(oq_perf_v1::interp_cop(level, outside_c, 30.0f),
+                   (cop35 + floor_cop(ambient, level)) / 2.0f * factor(30.0f));
+      assert_value(oq_perf_v1::interp_cop(level, outside_c, 25.0f), floor_cop(ambient, level) * factor(25.0f));
+      assert_value(oq_perf_v1::interp_cop(level, outside_c, 15.0f), floor_cop(ambient, level) * factor(25.0f));
+      // At 2 C outside and colder the lift at 25 C water is at least 21 K: pure straight line.
+      if (outside_c <= 2.0f) assert(factor(25.0f) == 1.0f);
       float previous = oq_perf_v1::interp_cop(level, outside_c, 45.0f);
       for (float supply = 44.0f; supply >= 10.0f; supply -= 1.0f) {
         const float cop = oq_perf_v1::interp_cop(level, outside_c, supply);
@@ -130,14 +135,41 @@ void assert_low_supply_cop_extrapolation() {
   // Between ambient nodes both supply rows are interpolated first.
   const float cop35 = oq_perf_v1::interp_cop(1, 4.5f, 35.0f);
   const float cop45 = oq_perf_v1::interp_cop(1, 4.5f, 45.0f);
-  assert_value(oq_perf_v1::interp_cop(1, 4.5f, 25.0f), cop35 + (cop35 - cop45));
+  assert_value(oq_perf_v1::interp_cop(1, 4.5f, 25.0f),
+               (cop35 + (cop35 - cop45)) * oq_perf_v1::low_lift_factor(1, 4.5f, 25.0f));
   for (const auto variant : {oq_odu::Variant::V1, oq_odu::Variant::V1_5}) {
     const auto prediction = oq_perf::predict_heating_hz(variant, 30.0f, 7.0f, 25.0f);
     assert(prediction.available);
     assert_value(prediction.pth_w, oq_perf_v1::P_th_W[3][0][0]);
-    assert_value(prediction.cop, floor_cop(3, 1));
-    assert_value(prediction.pel_w, oq_perf_v1::P_th_W[3][0][0] / floor_cop(3, 1));
+    // 30 Hz at 7 C outside and 25 C water: 18 K lift, factor (21 + 10) / (18 + 10).
+    const float cop = floor_cop(3, 1) * 31.0f / 28.0f;
+    assert_value(prediction.cop, cop);
+    assert_value(prediction.pel_w, oq_perf_v1::P_th_W[3][0][0] / cop);
   }
+}
+
+void assert_low_lift_factor() {
+  using oq_perf_v1::low_lift_factor;
+  // (21 + d) / (lift + d) below 21 K of lift, d = 10 K at 30 Hz.
+  assert_value(low_lift_factor(1, 12.0f, 25.0f), 31.0f / 23.0f);
+  assert_value(low_lift_factor(1, 4.0f, 25.0f), 1.0f);
+  assert_value(low_lift_factor(1, 4.5f, 25.0f), 31.0f / 30.5f);
+  // Higher frequencies carry a larger d and gain much less.
+  assert_value(low_lift_factor(2, 12.0f, 25.0f), 53.56f / 45.56f);
+  assert_value(low_lift_factor(10, 12.0f, 25.0f), 1423.96f / 1415.96f);
+  assert(low_lift_factor(4, 12.0f, 25.0f) < low_lift_factor(2, 12.0f, 25.0f));
+  // Water at or above outside temperature caps the factor.
+  assert_value(low_lift_factor(1, 30.0f, 25.0f), 1.6f);
+  assert_value(low_lift_factor(1, 25.0f, 25.0f), 1.6f);
+  // The factor fades out between 30 and 35 C water and is 1 from 35 C up.
+  assert_value(low_lift_factor(1, 20.0f, 32.5f), 1.0f + (31.0f / 22.5f - 1.0f) * 0.5f);
+  assert_value(low_lift_factor(1, 20.0f, 35.0f), 1.0f);
+  assert_value(oq_perf_v1::interp_cop(1, 20.0f, 35.0f), oq_perf_v1::COP[4][0][0]);
+  assert_value(oq_perf_v1::interp_cop(1, 20.0f, 40.0f), (oq_perf_v1::COP[4][0][0] + oq_perf_v1::COP[4][1][0]) / 2.0f);
+  // Off, unknown outside temperature and out-of-range levels.
+  assert_value(low_lift_factor(0, 12.0f, 25.0f), 1.0f);
+  assert_value(low_lift_factor(1, NAN, 25.0f), 1.0f);
+  assert_value(low_lift_factor(11, 12.0f, 25.0f), low_lift_factor(10, 12.0f, 25.0f));
 }
 
 void assert_frequency_dispatch() {
@@ -171,6 +203,7 @@ int main() {
   assert_missing_corner_dependencies();
   assert_clamped_boundaries();
   assert_low_supply_cop_extrapolation();
+  assert_low_lift_factor();
   assert_frequency_dispatch();
   return 0;
 }

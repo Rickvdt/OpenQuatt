@@ -133,12 +133,35 @@ static inline float interp_power_th_w(int level, float Tamb, float Tsup) {
 // to this floor instead of freezing at 35 C. Thermal power stays clamped at 35 C.
 static constexpr float COP_EXTRAPOLATION_FLOOR_C = 25.0f;
 
+// Low-lift correction on top of that straight line (personal fork, fitted on
+// this installation's V1.5 Duo measurements). Below LOW_LIFT_THRESHOLD_K of lift
+// (water minus outside) the COP rises faster than the map's line suggests:
+// factor = min(cap, (L0 + d) / (lift + d)), with d = 10 * (Hz / 30)^4.5 per
+// level, so low frequencies gain most. The factor fades out between 30 and
+// 35 C water, leaving 35 C and above unchanged.
+static constexpr float LOW_LIFT_THRESHOLD_K = 21.0f;
+static constexpr float LOW_LIFT_MAX_FACTOR = 1.6f;
+static constexpr float LOW_LIFT_FADE_K = 5.0f;
+static constexpr float LOW_LIFT_D_K[N_LVL] = {10.00f,  32.56f,  90.96f,  152.96f,  243.75f,
+                                              371.78f, 513.99f, 780.33f, 1084.77f, 1402.96f};
+
+static inline float low_lift_factor(int level, float Tamb, float supply_c) {
+  if (level <= 0 || !std::isfinite(Tamb)) return 1.0f;
+  const float lift = std::fmax(supply_c - Tamb, 0.0f);
+  if (lift >= LOW_LIFT_THRESHOLD_K) return 1.0f;
+  const float d = LOW_LIFT_D_K[(level > N_LVL ? N_LVL : level) - 1];
+  const float factor = std::fmin((LOW_LIFT_THRESHOLD_K + d) / (lift + d), LOW_LIFT_MAX_FACTOR);
+  const float fade = std::fmin(std::fmax((T_sup_bp[0] - supply_c) / LOW_LIFT_FADE_K, 0.0f), 1.0f);
+  return 1.0f + (factor - 1.0f) * fade;
+}
+
 static inline float interp_cop(int level, float Tamb, float Tsup) {
   const float cop = interp_3d(COP, level, Tamb, Tsup);
   if (!(Tsup < T_sup_bp[0]) || std::isnan(cop)) return cop;
+  const float supply_c = std::fmax(Tsup, COP_EXTRAPOLATION_FLOOR_C);
   const float slope = (cop - interp_3d(COP, level, Tamb, T_sup_bp[1])) / (T_sup_bp[1] - T_sup_bp[0]);
-  if (!std::isfinite(slope) || slope <= 0.0f) return cop;
-  return cop + slope * (T_sup_bp[0] - std::fmax(Tsup, COP_EXTRAPOLATION_FLOOR_C));
+  const float line = !std::isfinite(slope) || slope <= 0.0f ? cop : cop + slope * (T_sup_bp[0] - supply_c);
+  return line * low_lift_factor(level, Tamb, supply_c);
 }
 
 static inline float interp_power_el_w(int level, float Tamb, float Tsup, float cop_fallback = 3.0f) {
