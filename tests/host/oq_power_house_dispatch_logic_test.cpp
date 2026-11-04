@@ -361,6 +361,39 @@ void test_duo_holds_and_boost() {
   assert(strcmp(request_reason_name(15), "oil_return_hold") == 0);
   assert(strcmp(request_reason_name(16), "ph_idle") == 0);
 }
+void test_idle_pump_in_efficiency_only() {
+  // A stopped Duo unit keeps pumping. Its draw tips the single/Duo comparison
+  // but leaves the soft/peak checks on the compressor estimate alone.
+  auto in = input(true);
+  in.requested_w = 4000.0f;
+  for (auto* selected : {&in.hp1, &in.hp2}) {
+    selected->levels[1].electrical_w = 400.0f;
+    selected->levels[2].electrical_w = 430.0f;
+    selected->levels[3].electrical_w = 900.0f;
+    selected->levels[4].electrical_w = 1000.0f;
+  }
+  in.hp1.candidate.previous_applied_level = 4;
+  auto cfg = tuning();
+  // Duo 2+2 is 140 W cheaper: inside the 150 W topology margin, so stay single.
+  auto out = decide_dispatch(in, cfg, {});
+  assert(out.hp1_level == 4 && out.hp2_level == 0 && out.reason == Reason::HOLD_ACTIVE);
+  cfg.idle_pump_w = 35.0f;
+  assert(make_candidate(in, cfg, 4, 0, 4000.0f).electrical_w == 1035.0f);
+  assert(make_candidate(in, cfg, 2, 2, 4000.0f).electrical_w == 860.0f);
+  out = decide_dispatch(in, cfg, {});
+  assert(out.hp1_level == 2 && out.hp2_level == 2 && out.reason == Reason::LESS_POWER);
+  expect_safe(out, in, cfg);
+  // The limit checks still see 1000 W for the single unit.
+  cfg.soft_limit_w = cfg.peak_limit_w = 1000.0f;
+  auto single = make_candidate(in, cfg, 4, 0, 4000.0f);
+  assert(single.valid && single.over_soft_w == 0.0f && single.electrical_w == 1035.0f);
+  cfg.soft_limit_w = 990.0f;
+  assert(make_candidate(in, cfg, 4, 0, 4000.0f).over_soft_w == 10.0f);
+  // Without a second unit there is no idle pump to count.
+  auto mono = input(false);
+  mono.hp1.levels[4].electrical_w = 1000.0f;
+  assert(make_candidate(mono, cfg, 4, 0, 4000.0f).electrical_w == 1000.0f);
+}
 }  // namespace
 int main() {
   test_cold_weather_request_reaches_dispatch_and_deficit();
@@ -370,5 +403,6 @@ int main() {
   test_performance_supply_fallback();
   test_single_and_failures();
   test_duo_holds_and_boost();
+  test_idle_pump_in_efficiency_only();
   return 0;
 }

@@ -33,6 +33,7 @@ struct TickConfig {
   float optimizer_penalty_per_w;
   float topology_power_margin_w;
   float topology_heat_advantage_w;
+  float idle_pump_w;
   int defrost_comp_min_f;
   int defrost_comp_boost_steps;
   bool ot_room_temperature_fresh;
@@ -282,9 +283,10 @@ class Runtime {
       dispatch_input.pair_context = &model;
     }
     const oq_power_house_dispatch::DispatchTuning dispatch_tuning{
-        id(oq_power_limit_soft_w),       id(oq_power_limit_peak_w),        config.optimizer_penalty_per_w,
-        config.topology_power_margin_w,  config.topology_heat_advantage_w, config.defrost_comp_min_f,
-        config.defrost_comp_boost_steps,
+        id(oq_power_limit_soft_w),        id(oq_power_limit_peak_w),
+        config.optimizer_penalty_per_w,   config.topology_power_margin_w,
+        config.topology_heat_advantage_w, config.defrost_comp_min_f,
+        config.defrost_comp_boost_steps,  config.idle_pump_w,
     };
     float minimum_viable_w = NAN;
     int minimum_viable_level = 0;

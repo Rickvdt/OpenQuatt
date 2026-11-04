@@ -514,6 +514,7 @@ interval:
               ${oq_optimizer_penalty_per_w},
               ${oq_optimizer_topology_power_margin_w},
               ${oq_optimizer_topology_heat_advantage_w},
+              ${oq_optimizer_idle_pump_w},
               (int) roundf(${oq_defrost_comp_min_f}),
               (int) roundf(${oq_defrost_comp_boost_steps}),
               (${oq_ot_room_temperature_fresh_expr}),
