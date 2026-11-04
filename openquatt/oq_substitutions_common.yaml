@@ -201,6 +201,7 @@ oq_hp_min_runtime_min_s: "300"                        # Build-time floor for the
 oq_optimizer_penalty_per_w: "5.0"                     # Cost factor above soft limit [cost/W].
 oq_optimizer_topology_power_margin_w: "150.0"         # Required power delta before a single<->duo topology switch counts as a meaningful efficiency gain [W].
 oq_optimizer_topology_heat_advantage_w: "450.0"       # Required heat-match advantage before a less-efficient topology may override the efficiency-first choice [W].
+oq_optimizer_idle_pump_w: "35.0"                      # Pump draw of the stopped Duo unit while the other heats; added to single-unit candidates for the efficiency comparison only [W].
 oq_defrost_power_factor: "0.764"                      # Thermal derate on a defrosting HP in duo dispatch.
 oq_defrost_comp_min_f: "6"                            # Minimum demand f before single-defrost compensation is applied.
 oq_defrost_comp_boost_steps: "1"                      # Extra level steps on non-defrost HP during single-defrost compensation.

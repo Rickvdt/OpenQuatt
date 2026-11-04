@@ -112,6 +112,7 @@ struct DispatchTuning {
   float over_soft_penalty_per_w = 5.0f;
   float topology_power_margin_w = 150.0f, topology_heat_advantage_w = 450.0f;
   int defrost_boost_min_level = 6, defrost_boost_steps = 1;
+  float idle_pump_w = 0.0f;
 };
 struct DispatchDecision {
   int hp1_level = 0, hp2_level = 0, owner_hp = 0;
@@ -219,6 +220,10 @@ inline Candidate make_candidate(const DispatchInput& in, const DispatchTuning& t
   result.valid = true;
   result.error_w = std::fabs(result.thermal_w - target_w);
   result.over_soft_w = std::max(0.0f, result.electrical_w - tuning.soft_limit_w);
+  // In a Duo the stopped unit keeps its pump running. Count it for the
+  // efficiency comparison only; the power-limit checks above stay unchanged.
+  if (in.duo && result.active_count == 1 && std::isfinite(tuning.idle_pump_w) && tuning.idle_pump_w > 0.0f)
+    result.electrical_w += tuning.idle_pump_w;
   result.level_moves =
       std::abs(result.hp1_level - applied_level(in.hp1)) + std::abs(result.hp2_level - applied_level(in.hp2));
   const int previous_hp1 = applied_level(in.hp1), previous_hp2 = applied_level(in.hp2);
