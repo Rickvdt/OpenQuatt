@@ -121,7 +121,11 @@ is geen beschrijving van een reeds actieve adaptive regelaar.
 De dispatcher vergelijkt toegestane single- en duo-kandidaten. Elektrisch
 ingangsvermogen, thermische dekking, beschikbare HP's, runtimebalans en
 wisselhysterese bepalen samen de keuze. Een kleine berekende winst veroorzaakt
-niet direct een topologiewissel.
+niet direct een topologiewissel. Single-kandidaten in een Duo dragen het
+pompvermogen van de stilstaande unit (`oq_optimizer_idle_pump_w`); de
+soft/peak-controle rekent zonder die pomp. De V1/V1.5-kaart laat de COP onder
+35 °C aanvoer doorlopen met de eigen 35→45 °C-helling, tot 25 °C; het thermisch
+vermogen blijft op 35 °C geklemd.
 
 Bij geldige flow en inlaattemperatuur voorspelt het model de waterketen
 HP1 → HP2: de uitlaat van HP1 wordt de inlaat voor HP2. Bij ontbrekende
