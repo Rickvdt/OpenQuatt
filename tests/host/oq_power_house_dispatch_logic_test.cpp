@@ -365,6 +365,86 @@ void test_duo_holds_and_boost() {
   assert(strcmp(request_reason_name(16), "ph_loop_guard") == 0);
   assert(strcmp(request_reason_name(17), "ph_idle") == 0);
 }
+void test_stopped_unit_in_efficiency_only() {
+  // A stopped Duo unit keeps pumping. Its draw tips the single/Duo comparison
+  // but leaves the soft/peak checks on the compressor estimate alone.
+  auto in = input(true);
+  in.requested_w = 4000.0f;
+  for (auto* selected : {&in.hp1, &in.hp2}) {
+    selected->levels[1].electrical_w = 400.0f;
+    selected->levels[2].electrical_w = 430.0f;
+    selected->levels[3].electrical_w = 900.0f;
+    selected->levels[4].electrical_w = 1000.0f;
+  }
+  in.hp1.candidate.previous_applied_level = 4;
+  auto cfg = tuning();
+  // Duo 2+2 is 140 W cheaper: inside the 150 W topology margin, so stay single.
+  auto out = decide_dispatch(in, cfg, {});
+  assert(out.hp1_level == 4 && out.hp2_level == 0 && out.reason == Reason::HOLD_ACTIVE);
+  // Each single candidate pays for the unit that stands by.
+  cfg.hp1_standby_w = 20.0f;
+  cfg.hp2_standby_w = 35.0f;
+  assert(make_candidate(in, cfg, 4, 0, 4000.0f).electrical_w == 1035.0f);
+  assert(make_candidate(in, cfg, 0, 4, 4000.0f).electrical_w == 1020.0f);
+  assert(make_candidate(in, cfg, 2, 2, 4000.0f).electrical_w == 860.0f);
+  out = decide_dispatch(in, cfg, {});
+  assert(out.hp1_level == 2 && out.hp2_level == 2 && out.reason == Reason::LESS_POWER);
+  expect_safe(out, in, cfg);
+  // The limit checks still see 1000 W for the single unit.
+  cfg.soft_limit_w = cfg.peak_limit_w = 1000.0f;
+  auto single = make_candidate(in, cfg, 4, 0, 4000.0f);
+  assert(single.valid && single.over_soft_w == 0.0f && single.electrical_w == 1035.0f);
+  cfg.soft_limit_w = 990.0f;
+  assert(make_candidate(in, cfg, 4, 0, 4000.0f).over_soft_w == 10.0f);
+  // Without a second unit nothing stands by.
+  auto mono = input(false);
+  mono.hp1.levels[4].electrical_w = 1000.0f;
+  assert(make_candidate(mono, cfg, 4, 0, 4000.0f).electrical_w == 1000.0f);
+}
+void test_owner_holds_while_standby_follows_the_running_state() {
+  // Closed loop: every tick feeds back the levels it chose and sets each unit's standby draw from its
+  // state, as the runtime does. A unit's own pump runs at a slightly different power while it heats than
+  // while it stands by; that must never be enough to hand single operation back and forth.
+  const auto swaps = [](float running_w, float standing_by_w) {
+    auto in = input(true);
+    in.requested_w = 1000.0f;
+    in.hp1.candidate.previous_applied_level = 1;
+    auto cfg = tuning();
+    int count = 0;
+    for (int tick = 0; tick < 6; ++tick) {
+      const bool hp1_runs = in.hp1.candidate.previous_applied_level > 0;
+      cfg.hp1_standby_w = hp1_runs ? running_w : standing_by_w;
+      cfg.hp2_standby_w = hp1_runs ? standing_by_w : running_w;
+      const auto out = decide_dispatch(in, cfg, {});
+      assert(out.output_valid && out.hp1_level + out.hp2_level == 1);
+      expect_safe(out, in, cfg);
+      count += (out.hp1_level > 0) != hp1_runs;
+      in.hp1.candidate.previous_applied_level = out.hp1_level;
+      in.hp2.candidate.previous_applied_level = out.hp2_level;
+      in.now_ms += 10000;
+    }
+    return count;
+  };
+  // Base plus own pump: 37.15 W heating, 35.15 W standing by, either way round.
+  assert(swaps(37.15f, 35.15f) == 0);
+  assert(swaps(35.15f, 37.15f) == 0);
+  // A standing-by value that also carried the unit's bottom-plate heater (its measured input, ~190 W)
+  // would hand over on every tick.
+  assert(swaps(35.15f, 190.0f) == 6);
+}
+void test_unusable_standby_counts_nothing() {
+  // No pump power (pump off, standby code, unit offline) gives no cost rather than a guess. That is also
+  // a start from idle, where neither pump runs yet: the choice is the one without the term.
+  auto in = input(true);
+  const auto plain = decide_dispatch(in, tuning(), {});
+  auto cfg = tuning();
+  for (const float standby_w : {NAN, -1.0f, 0.0f}) {
+    cfg.hp1_standby_w = cfg.hp2_standby_w = standby_w;
+    assert(make_candidate(in, cfg, 3, 0, 3000.0f).electrical_w == 300.0f);
+    const auto out = decide_dispatch(in, cfg, {});
+    assert(out.hp1_level == plain.hp1_level && out.hp2_level == plain.hp2_level && out.reason == plain.reason);
+  }
+}
 }  // namespace
 int main() {
   test_cold_weather_request_reaches_dispatch_and_deficit();
@@ -374,5 +454,8 @@ int main() {
   test_performance_supply_fallback();
   test_single_and_failures();
   test_duo_holds_and_boost();
+  test_stopped_unit_in_efficiency_only();
+  test_owner_holds_while_standby_follows_the_running_state();
+  test_unusable_standby_counts_nothing();
   return 0;
 }
