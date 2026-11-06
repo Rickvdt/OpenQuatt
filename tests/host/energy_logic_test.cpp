@@ -28,6 +28,16 @@ int main() {
          oq_energy::hp_input_power({0.0f, 0.0f, 0.0f, true, false, NAN, false, false}));
   assert(oq_energy::hp_input_power({0.0f, 0.0f, 1000.0f, false, false, 0.0f, false, false}) == 0.0f);
 
+  // Standing by with only the pump running: the estimator's base plus the reported pump power.
+  assert(near(oq_energy::standby_input_power(oq_odu::Variant::V1_5, 230.0f, 30.0f), 35.150232f));
+  assert(oq_energy::standby_input_power(oq_odu::Variant::V1, NAN, 30.0f) ==
+         oq_energy::standby_input_power(oq_odu::Variant::V1_5, 230.0f, 30.0f));
+  assert(near(oq_energy::standby_input_power(oq_odu::Variant::V2_NEW_MODEL, 230.0f, 30.0f), 35.93f));
+  assert(isnan(oq_energy::standby_input_power(oq_odu::Variant::V2_OLD_MODEL, NAN, 30.0f)));
+  for (const float pump_w : {NAN, -1.0f})
+    assert(isnan(oq_energy::standby_input_power(oq_odu::Variant::V1_5, 230.0f, pump_w)));
+  assert(isnan(oq_energy::standby_input_power(oq_odu::Variant::UNKNOWN, 230.0f, 30.0f)));
+
   const oq_energy::HpElectricalInputs v2_nominal{230.0f, 2.0f, 500.0f, true, true, 30.0f, false, false};
   const auto v2_old = oq_energy::hp_input_power_for_variant(oq_odu::Variant::V2_OLD_MODEL, v2_nominal, true);
   const auto v2_new = oq_energy::hp_input_power_for_variant(oq_odu::Variant::V2_NEW_MODEL, v2_nominal, true);

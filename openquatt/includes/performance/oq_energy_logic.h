@@ -108,6 +108,15 @@ inline HpInputPowerEstimate hp_input_power_for_variant(oq_odu::Variant variant, 
   return {nonnegative(power_w), HpInputPowerStatus::V2_ESTIMATED};
 }
 
+// The same estimate for this unit standing by with its pump at the given reported power: no
+// compressor, fan or heater load. NAN when the pump power or the variant is unknown.
+inline float standby_input_power(oq_odu::Variant variant, float voltage_v, float pump_power_w) {
+  if (!isfinite(pump_power_w) || pump_power_w < 0.0f) return NAN;
+  const auto estimate =
+      hp_input_power_for_variant(variant, {voltage_v, 0.0f, 0.0f, true, true, pump_power_w, false, false}, true);
+  return estimate.available() ? estimate.watts : NAN;
+}
+
 // Signed thermal transfer to water. Callers decide whether operating mode and
 // measurement provenance make this value suitable for their purpose.
 inline float hydronic_heat_power(float inlet_c, float outlet_c, float flow_lph, float cp_j_per_kgk) {

@@ -367,6 +367,24 @@ class Runtime {
         config.topology_heat_advantage_w, demand_input.rated_w * config.defrost_comp_min_house_fraction,
         config.defrost_comp_boost_steps,
     };
+    // What each unit draws while it stands by and the other heats: base load plus its pump, at the power the
+    // pump itself reports. The same in either topology, since both pumps run in both; its measured input is
+    // not, as that also carries heater load the topology does not decide. No pump power: no cost.
+    const auto standby_w = [&](bool hp1) {
+      float voltage_v = id(hp1_voltage).state;
+      float pump_w = id(hp1_pump_power).state;
+#if OQ_TOPOLOGY_DUO
+      if (!hp1) {
+        voltage_v = id(hp2_voltage).state;
+        pump_w = id(hp2_pump_power).state;
+      }
+#endif
+      return oq_energy::standby_input_power(frequency.performance_variant(hp1), voltage_v, pump_w);
+    };
+    if (duo) {
+      dispatch_tuning.hp1_standby_w = standby_w(true);
+      dispatch_tuning.hp2_standby_w = standby_w(false);
+    }
     float minimum_viable_w = NAN;
     int minimum_viable_level = 0;
     const auto include_minimum = [&](const oq_power_house_dispatch::HpInput& hp) {
