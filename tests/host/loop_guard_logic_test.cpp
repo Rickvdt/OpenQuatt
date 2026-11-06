@@ -108,17 +108,17 @@ void test_expired_lockout_is_cleared_and_never_compared_again() {
 
 void test_ownership_is_decided_against_level_one_output() {
   // P1 = 1800 W thermal: the ask is max(1.2 * P1, P1 + 450) = 2250 W.
-  Plan plan = plan_request(true, 0, 0.0f, 1800.0f, 9000.0f, 100);
+  Plan plan = plan_request(true, 0.0f, 1800.0f);
   assert(plan.owns_request && fabsf(plan.requested_w - 2250.0f) < 0.5f);
   // A house asking 2000 W wants more than level 1 delivers: the guard yields,
   // even though 2000 is below the inflated ask.
-  plan = plan_request(true, 20, 2000.0f, 1800.0f, 9000.0f, 100);
+  plan = plan_request(true, 2000.0f, 1800.0f);
   assert(!plan.owns_request);
-  plan = plan_request(true, 10, 1200.0f, 1800.0f, 9000.0f, 100);
+  plan = plan_request(true, 1200.0f, 1800.0f);
   assert(plan.owns_request);
-  // Inactive guard: nothing owned, demand untouched.
-  plan = plan_request(false, 7, 0.0f, 1800.0f, 9000.0f, 100);
-  assert(!plan.owns_request && plan.demand == 7);
+  // Inactive guard: nothing owned, nothing asked.
+  plan = plan_request(false, 0.0f, 1800.0f);
+  assert(!plan.owns_request && std::isnan(plan.requested_w));
 }
 
 void test_status_reports_the_yielded_state() {

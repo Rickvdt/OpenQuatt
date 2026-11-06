@@ -19,15 +19,11 @@
 namespace oq_loop_guard_runtime {
 
 // Evaluates the guard and, when the guard rather than the house model owns the
-// request, raises both the demand level and the requested power in place. Both
-// are left untouched while the guard is inactive, so it is inert unless
-// deliberately enabled.
-//
-// v0.50 removed the demand ramp filter, so these are now the Power House
-// runtime's own locals: raw_demand feeds oq_demand_raw and the capped demand,
-// requested_w feeds oq_phouse_req_w and the dispatcher. Both must rise together
-// or the request is clamped straight back below the supervisor's low-load latch.
-inline void apply(uint32_t now_ms, int demand_max_f, int& raw_demand, float& requested_w) {
+// request, raises the requested power in place. It is left untouched while the
+// guard is inactive, so it is inert unless deliberately enabled. Power House
+// works in watts: requested_w feeds oq_phouse_req_w and the dispatcher, and
+// only the supervisory power limit caps it further down.
+inline void apply(uint32_t now_ms, float& requested_w) {
   const float loop_c = id(hp1_water_in_temp).has_state() ? id(hp1_water_in_temp).state : NAN;
   const bool protections_ok =
       id(oq_water_temp_limit_factor) > 0.0f && !id(oq_water_temp_hard_trip_active) && !id(oq_lowflow_fault_active);
@@ -53,16 +49,11 @@ inline void apply(uint32_t now_ms, int demand_max_f, int& raw_demand, float& req
   const float level1_w = std::isfinite(outside_c) && std::isfinite(supply_c)
                              ? oq_perf::interp_power_th_w_hz(oq_perf::model_frequency_hz(1), outside_c, supply_c)
                              : NAN;
-  const auto plan = oq_loop_guard::plan_request(guard.active, raw_demand, requested_w, level1_w,
-                                                id(house_rated_power_w).state, demand_max_f);
+  const auto plan = oq_loop_guard::plan_request(guard.active, requested_w, level1_w);
   id(oq_ph_loop_guard_owns_request) = plan.owns_request;
-  // Both levers move together or neither does. Flooring demand while the house
-  // owns the request would raise f on the dispatcher's behalf without the pin
-  // that stops the inflated figure reading as a call for level 2.
-  if (plan.owns_request) {
-    requested_w = plan.requested_w;
-    raw_demand = plan.demand;
-  }
+  // Only while the guard owns the request: pin_request() then keeps the inflated
+  // figure from reading as a call for level 2.
+  if (plan.owns_request) requested_w = plan.requested_w;
 
   char buf[96];
   oq_loop_guard::format_status(buf, sizeof(buf), guard, in.enabled, in.heat_draw, plan.owns_request, loop_c,
