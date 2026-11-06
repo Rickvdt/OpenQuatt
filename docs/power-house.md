@@ -327,6 +327,8 @@ Bij beschikbare inlaattemperatuur en flow berekent OpenQuatt het vermogen voor i
 
 De V1/V1.5-kaart van Quatt begint bij 35 °C water. Bij lagere watertemperaturen, zoals bij vloerverwarming, schatte de kaart het stroomverbruik daardoor 10-30 % te hoog. De kaart heeft daarom twee extra punten bij 25 en 30 °C, bepaald op meetdata van 54 V1/V1.5-installaties. Alleen de COP verandert; het thermisch vermogen en alles vanaf 35 °C blijven de waarden van Quatt. De meetdata loopt tot ongeveer 2 °C buiten; bij vorst zijn de nieuwe punten een schatting.
 
+Draait bij `Duo` maar één compressor, dan blijft de pomp van de stilstaande warmtepomp meedraaien. De vergelijking tussen één en twee warmtepompen telt dat verbruik mee: het gemeten verbruik van de stilstaande warmtepomp, of tijdens Duo-bedrijf wat die volgens zijn eigen pompvermogen in standby zou gebruiken (typisch 30-40 W). De stroomlimiet rekent zonder dat verbruik.
+
 ## Langer doorverwarmen (optioneel)
 
 Power House berekent continu hoeveel warmte je woning nodig heeft. **Langer doorverwarmen** bepaalt alleen hoe een bestaande verwarmingsrun bij heel weinig vraag mag doorgaan en daarna opnieuw mag beginnen. De functie staat standaard uit.

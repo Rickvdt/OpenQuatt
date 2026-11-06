@@ -8,6 +8,7 @@
 #include "esphome/components/openquatt_debug_recorder/warmup_diagnostics.h"
 
 #include "../performance/hp_perf_frequency.h"
+#include "../performance/oq_energy_logic.h"
 #include "../performance/oq_water_performance_runtime.h"
 #include "oq_compressor_frequency_runtime.h"
 #include "oq_heat_intent_runtime.h"
@@ -278,6 +279,28 @@ class Runtime {
         config.topology_heat_advantage_w, demand_input.rated_w * config.defrost_comp_min_house_fraction,
         config.defrost_comp_boost_steps,
     };
+    // What each unit draws while it stands by and the other heats: its pump keeps running.
+    const auto standby_w = [&](bool hp1) {
+      float working_mode = id(hp1_working_mode).state;
+      float input_w = id(hp1_power_input).state;
+      float voltage_v = id(hp1_voltage).state;
+      float pump_w = id(hp1_pump_power).state;
+#if OQ_TOPOLOGY_DUO
+      if (!hp1) {
+        working_mode = id(hp2_working_mode).state;
+        input_w = id(hp2_power_input).state;
+        voltage_v = id(hp2_voltage).state;
+        pump_w = id(hp2_pump_power).state;
+      }
+#endif
+      return oq_power_house_dispatch::standby_draw_w(
+          working_mode == 0.0f, input_w,
+          oq_energy::standby_input_power(frequency.performance_variant(hp1), voltage_v, pump_w));
+    };
+    if (duo) {
+      dispatch_tuning.hp1_standby_w = standby_w(true);
+      dispatch_tuning.hp2_standby_w = standby_w(false);
+    }
     float minimum_viable_w = NAN;
     int minimum_viable_level = 0;
     const auto include_minimum = [&](const oq_power_house_dispatch::HpInput& hp) {

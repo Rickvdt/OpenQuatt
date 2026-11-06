@@ -52,6 +52,12 @@ struct HpInput {
   uint8_t fixed_level = 0;
   std::array<LevelEstimate, kMaxLevel + 1> levels{};
 };
+// Standing by now: its measured input. Running now: the standby estimate from its own live pump power,
+// so single and Duo carry the same cost whichever topology is active.
+inline float standby_draw_w(bool standing_by, float measured_input_w, float standby_estimate_w) {
+  if (standing_by && std::isfinite(measured_input_w) && measured_input_w >= 0.0f) return measured_input_w;
+  return std::isfinite(standby_estimate_w) && standby_estimate_w >= 0.0f ? standby_estimate_w : 0.0f;
+}
 struct TimedTail {
   bool previous_active = false, armed = false;
   uint32_t started_ms = 0;
@@ -113,6 +119,8 @@ struct DispatchTuning {
   float defrost_boost_min_w = 0.0f;
   int defrost_boost_steps = 1;
   bool defrost_boost_min_exclusive = false;
+  // Electrical input of each unit while it stands by in a Duo and the other heats; its pump keeps running.
+  float hp1_standby_w = 0.0f, hp2_standby_w = 0.0f;
 };
 
 inline bool defrost_boost_demand_allowed(float requested_w, const DispatchTuning& tuning) {
@@ -228,6 +236,10 @@ inline Candidate make_candidate(const DispatchInput& in, const DispatchTuning& t
   result.valid = true;
   result.error_w = std::fabs(result.thermal_w - target_w);
   result.over_soft_w = std::max(0.0f, result.electrical_w - tuning.soft_limit_w);
+  // A single candidate in a Duo also pays for the stopped unit. Efficiency comparison only: the
+  // power-limit checks above stay on the compressor estimate.
+  if (in.duo && result.active_count == 1)
+    result.electrical_w += result.hp1_level > 0 ? tuning.hp2_standby_w : tuning.hp1_standby_w;
   result.level_moves =
       std::abs(result.hp1_level - applied_level(in.hp1)) + std::abs(result.hp2_level - applied_level(in.hp2));
   const int previous_hp1 = applied_level(in.hp1), previous_hp2 = applied_level(in.hp2);

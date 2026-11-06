@@ -365,6 +365,53 @@ void test_duo_holds_and_boost() {
   assert(strcmp(request_reason_name(16), "ph_loop_guard") == 0);
   assert(strcmp(request_reason_name(17), "ph_idle") == 0);
 }
+void test_stopped_unit_in_efficiency_only() {
+  // A stopped Duo unit keeps pumping. Its draw tips the single/Duo comparison
+  // but leaves the soft/peak checks on the compressor estimate alone.
+  auto in = input(true);
+  in.requested_w = 4000.0f;
+  for (auto* selected : {&in.hp1, &in.hp2}) {
+    selected->levels[1].electrical_w = 400.0f;
+    selected->levels[2].electrical_w = 430.0f;
+    selected->levels[3].electrical_w = 900.0f;
+    selected->levels[4].electrical_w = 1000.0f;
+  }
+  in.hp1.candidate.previous_applied_level = 4;
+  auto cfg = tuning();
+  // Duo 2+2 is 140 W cheaper: inside the 150 W topology margin, so stay single.
+  auto out = decide_dispatch(in, cfg, {});
+  assert(out.hp1_level == 4 && out.hp2_level == 0 && out.reason == Reason::HOLD_ACTIVE);
+  // Each single candidate pays for the unit that stands by.
+  cfg.hp1_standby_w = 20.0f;
+  cfg.hp2_standby_w = 35.0f;
+  assert(make_candidate(in, cfg, 4, 0, 4000.0f).electrical_w == 1035.0f);
+  assert(make_candidate(in, cfg, 0, 4, 4000.0f).electrical_w == 1020.0f);
+  assert(make_candidate(in, cfg, 2, 2, 4000.0f).electrical_w == 860.0f);
+  out = decide_dispatch(in, cfg, {});
+  assert(out.hp1_level == 2 && out.hp2_level == 2 && out.reason == Reason::LESS_POWER);
+  expect_safe(out, in, cfg);
+  // The limit checks still see 1000 W for the single unit.
+  cfg.soft_limit_w = cfg.peak_limit_w = 1000.0f;
+  auto single = make_candidate(in, cfg, 4, 0, 4000.0f);
+  assert(single.valid && single.over_soft_w == 0.0f && single.electrical_w == 1035.0f);
+  cfg.soft_limit_w = 990.0f;
+  assert(make_candidate(in, cfg, 4, 0, 4000.0f).over_soft_w == 10.0f);
+  // Without a second unit nothing stands by.
+  auto mono = input(false);
+  mono.hp1.levels[4].electrical_w = 1000.0f;
+  assert(make_candidate(mono, cfg, 4, 0, 4000.0f).electrical_w == 1000.0f);
+}
+void test_standby_draw_selection() {
+  // Standing by: its measured input, whatever it contains.
+  assert(standby_draw_w(true, 35.15f, 31.0f) == 35.15f);
+  assert(standby_draw_w(true, 5.15f, NAN) == 5.15f);
+  // Running: the standby estimate from its own pump, never its compressor input.
+  assert(standby_draw_w(false, 380.0f, 35.15f) == 35.15f);
+  assert(standby_draw_w(true, NAN, 31.0f) == 31.0f);
+  // Nothing usable: no cost rather than a guess.
+  assert(standby_draw_w(false, 380.0f, NAN) == 0.0f);
+  assert(standby_draw_w(true, -1.0f, -1.0f) == 0.0f);
+}
 }  // namespace
 int main() {
   test_cold_weather_request_reaches_dispatch_and_deficit();
@@ -374,5 +421,7 @@ int main() {
   test_performance_supply_fallback();
   test_single_and_failures();
   test_duo_holds_and_boost();
+  test_stopped_unit_in_efficiency_only();
+  test_standby_draw_selection();
   return 0;
 }
