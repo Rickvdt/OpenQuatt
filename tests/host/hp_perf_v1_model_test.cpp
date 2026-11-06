@@ -70,16 +70,9 @@ void assert_missing_corner_dependencies() {
   }
 }
 
-// COP at the extrapolation floor: the 35 C node plus one 35->45 C step.
-float floor_cop(int ambient, int level) {
-  const float cop35 = oq_perf_v1::COP[ambient][0][level - 1];
-  return cop35 + (cop35 - oq_perf_v1::COP[ambient][1][level - 1]);
-}
-
 void assert_clamped_boundaries() {
-  // Out-of-range behaviour remains clamping, with the same missing data
-  // requirement as the exact boundary point. Only the COP below 35 C
-  // extrapolates, and it stops at the 25 C floor.
+  // Existing out-of-range behaviour remains clamping, with the same missing
+  // data requirement as the exact boundary point.
   for (int level = 1; level <= oq_perf_v1::N_LVL; ++level) {
     for (const float outside : {-30.0f, -15.0f, 12.0f, 30.0f}) {
       for (const float supply : {10.0f, 35.0f, 55.0f, 70.0f}) {
@@ -87,56 +80,10 @@ void assert_clamped_boundaries() {
         const int supply_index = supply <= 35.0f ? 0 : oq_perf_v1::N_SUP - 1;
         assert_value(oq_perf_v1::interp_power_th_w(level, outside, supply),
                      oq_perf_v1::P_th_W[ambient_index][supply_index][level - 1]);
-        assert_value(
-            oq_perf_v1::interp_cop(level, outside, supply),
-            supply < 35.0f ? floor_cop(ambient_index, level) : oq_perf_v1::COP[ambient_index][supply_index][level - 1]);
+        assert_value(oq_perf_v1::interp_cop(level, outside, supply),
+                     oq_perf_v1::COP[ambient_index][supply_index][level - 1]);
       }
     }
-  }
-}
-
-void assert_low_supply_cop_extrapolation() {
-  for (int ambient = 0; ambient < oq_perf_v1::N_AMB; ++ambient) {
-    const float outside_c = oq_perf_v1::T_amb_bp[ambient];
-    for (int level = 1; level <= oq_perf_v1::N_LVL; ++level) {
-      const float power35 = oq_perf_v1::P_th_W[ambient][0][level - 1];
-      const float cop35 = oq_perf_v1::COP[ambient][0][level - 1];
-      if (std::isnan(cop35)) {
-        // Missing nodes stay missing below 35 C.
-        assert(std::isnan(oq_perf_v1::interp_cop(level, outside_c, 30.0f)));
-        continue;
-      }
-      // Every table cell has a positive 35->45 C slope, so the extension is active everywhere.
-      assert(cop35 > oq_perf_v1::COP[ambient][1][level - 1]);
-      assert_value(oq_perf_v1::interp_cop(level, outside_c, 35.0f), cop35);
-      assert(std::fabs(oq_perf_v1::interp_cop(level, outside_c, std::nextafter(35.0f, 0.0f)) - cop35) < 0.001f);
-      assert_value(oq_perf_v1::interp_cop(level, outside_c, 30.0f), (cop35 + floor_cop(ambient, level)) / 2.0f);
-      assert_value(oq_perf_v1::interp_cop(level, outside_c, 25.0f), floor_cop(ambient, level));
-      assert_value(oq_perf_v1::interp_cop(level, outside_c, 15.0f), floor_cop(ambient, level));
-      float previous = oq_perf_v1::interp_cop(level, outside_c, 45.0f);
-      for (float supply = 44.0f; supply >= 10.0f; supply -= 1.0f) {
-        const float cop = oq_perf_v1::interp_cop(level, outside_c, supply);
-        assert(cop >= previous - 0.0001f);
-        previous = cop;
-      }
-      for (const float supply : {10.0f, 25.0f, 30.0f, 34.0f}) {
-        // Thermal power stays at its 35 C value; only the electrical side follows the COP.
-        assert_value(oq_perf_v1::interp_power_th_w(level, outside_c, supply), power35);
-        assert_value(oq_perf_v1::interp_power_el_w(level, outside_c, supply),
-                     power35 / oq_perf_v1::interp_cop(level, outside_c, supply));
-      }
-    }
-  }
-  // Between ambient nodes both supply rows are interpolated first.
-  const float cop35 = oq_perf_v1::interp_cop(1, 4.5f, 35.0f);
-  const float cop45 = oq_perf_v1::interp_cop(1, 4.5f, 45.0f);
-  assert_value(oq_perf_v1::interp_cop(1, 4.5f, 25.0f), cop35 + (cop35 - cop45));
-  for (const auto variant : {oq_odu::Variant::V1, oq_odu::Variant::V1_5}) {
-    const auto prediction = oq_perf::predict_heating_hz(variant, 30.0f, 7.0f, 25.0f);
-    assert(prediction.available);
-    assert_value(prediction.pth_w, oq_perf_v1::P_th_W[3][0][0]);
-    assert_value(prediction.cop, floor_cop(3, 1));
-    assert_value(prediction.pel_w, oq_perf_v1::P_th_W[3][0][0] / floor_cop(3, 1));
   }
 }
 
@@ -170,7 +117,6 @@ int main() {
   assert_raw_nodes();
   assert_missing_corner_dependencies();
   assert_clamped_boundaries();
-  assert_low_supply_cop_extrapolation();
   assert_frequency_dispatch();
   return 0;
 }

@@ -129,17 +129,7 @@ static inline float interp_power_th_w(int level, float Tamb, float Tsup) {
   return interp_3d(P_th_W, level, Tamb, Tsup);
 }
 
-// Below the lowest supply node the COP follows the map's own 35->45 C slope down
-// to this floor instead of freezing at 35 C. Thermal power stays clamped at 35 C.
-static constexpr float COP_EXTRAPOLATION_FLOOR_C = 25.0f;
-
-static inline float interp_cop(int level, float Tamb, float Tsup) {
-  const float cop = interp_3d(COP, level, Tamb, Tsup);
-  if (!(Tsup < T_sup_bp[0]) || std::isnan(cop)) return cop;
-  const float slope = (cop - interp_3d(COP, level, Tamb, T_sup_bp[1])) / (T_sup_bp[1] - T_sup_bp[0]);
-  if (!std::isfinite(slope) || slope <= 0.0f) return cop;
-  return cop + slope * (T_sup_bp[0] - std::fmax(Tsup, COP_EXTRAPOLATION_FLOOR_C));
-}
+static inline float interp_cop(int level, float Tamb, float Tsup) { return interp_3d(COP, level, Tamb, Tsup); }
 
 static inline float interp_power_el_w(int level, float Tamb, float Tsup, float cop_fallback = 3.0f) {
   float pth = interp_power_th_w(level, Tamb, Tsup);

@@ -123,9 +123,10 @@ ingangsvermogen, thermische dekking, beschikbare HP's, runtimebalans en
 wisselhysterese bepalen samen de keuze. Een kleine berekende winst veroorzaakt
 niet direct een topologiewissel. Single-kandidaten in een Duo dragen het
 pompvermogen van de stilstaande unit (`oq_optimizer_idle_pump_w`); de
-soft/peak-controle rekent zonder die pomp. De V1/V1.5-kaart laat de COP onder
-35 °C aanvoer doorlopen met de eigen 35→45 °C-helling, tot 25 °C; het thermisch
-vermogen blijft op 35 °C geklemd.
+soft/peak-controle rekent zonder die pomp. Onder 35 °C aanvoer schaalt een
+factor uit vlootdata het elektrisch vermogen van de V1/V1.5-kaart
+(`hp_perf_v1_low_supply.h`). Vanaf 35 °C en voor het thermisch vermogen blijft de
+kaart van Quatt ongewijzigd; de factor is 1 op 35 °C, zonder sprong.
 
 Bij geldige flow en inlaattemperatuur voorspelt het model de waterketen
 HP1 → HP2: de uitlaat van HP1 wordt de inlaat voor HP2. Bij ontbrekende

@@ -321,7 +321,7 @@ Voor de meeste gebruikers is vooral dit belangrijk:
 
 Bij beschikbare inlaattemperatuur en flow berekent OpenQuatt het vermogen voor ieder kandidaatpaar met de waterketen HP1 → HP2: de voorspelde uitlaat van HP1 wordt de inlaat van HP2. Dit geldt ook voor Water Temperature Control. Bij ontbrekende watermetingen gebruikt de regeling de eigen verse uitlaattemperatuur van een draaiende ODU, met de bestaande temperatuurreferentie als terugval. Stilstaande ODU's en defrost behouden die bestaande referentie. Alle frequentiegrenzen, stroomlimieten en wachttijden blijven actief; 90 Hz inclusief blijft toegestaan.
 
-De V1/V1.5-kaart begint bij 35 °C water. Bij lagere watertemperaturen, zoals bij vloerverwarming, loopt de COP door met de helling die de kaart zelf tussen 35 en 45 °C heeft, tot 25 °C. Het thermisch vermogen blijft de waarde bij 35 °C. Draait bij `Duo` maar één compressor, dan telt de vergelijking ook de pomp van de stilstaande warmtepomp mee (35 W). De stroomlimiet rekent zonder die pomp.
+De V1/V1.5-kaart begint bij 35 °C water. Bij lagere watertemperaturen, zoals bij vloerverwarming, schatte de kaart het stroomverbruik 10-30 % te hoog. Daar past OpenQuatt een correctie toe, bepaald op meetdata van 53 V1/V1.5-installaties. Vanaf 35 °C water, en voor het thermisch vermogen, blijft de kaart van Quatt gelden. De correctie is gemeten tot ongeveer 2 °C buiten; bij vorst is het een schatting. Draait bij `Duo` maar één compressor, dan telt de vergelijking ook de pomp van de stilstaande warmtepomp mee (35 W). De stroomlimiet rekent zonder die pomp.
 
 ## Langer doorverwarmen (optioneel)
 

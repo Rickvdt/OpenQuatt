@@ -6,6 +6,7 @@
 
 #include "../odu/oq_odu_compressor_levels.h"
 #include "hp_perf_map.h"
+#include "hp_perf_v1_low_supply.h"
 
 namespace oq_perf {
 
@@ -84,11 +85,16 @@ inline HeatingPrediction predict_heating_hz(oq_odu::Variant variant, float frequ
   const float pth_w = interp_frequency_axis(V1_HEATING_FREQUENCIES_HZ, frequency_hz, [=](int level) {
     return oq_perf_v1::interp_power_th_w(level, Tamb, Tsup);
   });
-  const float cop = interp_frequency_axis(V1_HEATING_FREQUENCIES_HZ, frequency_hz,
-                                          [=](int level) { return oq_perf_v1::interp_cop(level, Tamb, Tsup); });
-  const float pel_w = interp_frequency_axis(V1_HEATING_FREQUENCIES_HZ, frequency_hz, [=](int level) {
+  const float map_cop = interp_frequency_axis(V1_HEATING_FREQUENCIES_HZ, frequency_hz,
+                                              [=](int level) { return oq_perf_v1::interp_cop(level, Tamb, Tsup); });
+  const float map_pel_w = interp_frequency_axis(V1_HEATING_FREQUENCIES_HZ, frequency_hz, [=](int level) {
     return oq_perf_v1::interp_power_el_w(level, Tamb, Tsup);
   });
+  // Below 35 C supply the clamped map overestimates the electrical power.
+  const float low_supply =
+      oq_perf_v1_low_supply::electrical_factor(variant == oq_odu::Variant::V1_5, frequency_hz, Tamb, Tsup);
+  const float cop = map_cop / low_supply;
+  const float pel_w = map_pel_w * low_supply;
   return {pth_w, cop, pel_w,
           std::isfinite(pth_w) && pth_w >= 0.0f && std::isfinite(cop) && cop >= 0.0f && std::isfinite(pel_w) &&
               pel_w >= 0.0f,
