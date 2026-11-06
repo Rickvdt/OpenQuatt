@@ -111,6 +111,10 @@ struct DispatchTuning {
   float defrost_boost_min_w = 0.0f;
   int defrost_boost_steps = 1;
   bool defrost_boost_min_exclusive = false;
+  // Electrical input of each unit while it stands by in a Duo and the other heats: its pump keeps running.
+  // Must not depend on which unit runs now, or the cost a switch was decided on changes with the switch.
+  // NAN or negative counts as nothing.
+  float hp1_standby_w = 0.0f, hp2_standby_w = 0.0f;
 };
 
 inline bool defrost_boost_demand_allowed(float requested_w, const DispatchTuning& tuning) {
@@ -226,6 +230,12 @@ inline Candidate make_candidate(const DispatchInput& in, const DispatchTuning& t
   result.valid = true;
   result.error_w = std::fabs(result.thermal_w - target_w);
   result.over_soft_w = std::max(0.0f, result.electrical_w - tuning.soft_limit_w);
+  // A single candidate in a Duo also pays for the stopped unit. Efficiency comparison only: the
+  // power-limit checks above stay on the compressor estimate.
+  if (in.duo && result.active_count == 1) {
+    const float standby_w = result.hp1_level > 0 ? tuning.hp2_standby_w : tuning.hp1_standby_w;
+    if (std::isfinite(standby_w) && standby_w > 0.0f) result.electrical_w += standby_w;
+  }
   result.level_moves =
       std::abs(result.hp1_level - applied_level(in.hp1)) + std::abs(result.hp2_level - applied_level(in.hp2));
   const int previous_hp1 = applied_level(in.hp1), previous_hp2 = applied_level(in.hp2);
