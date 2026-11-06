@@ -154,7 +154,6 @@ inline float requested_power_w(float level1_thermal_w) {
 struct Plan {
   bool owns_request = false;
   float requested_w = NAN;
-  int demand = 0;
 };
 
 // What to ask for while the guard is active.
@@ -163,14 +162,8 @@ struct Plan {
 // request. That distinction is what keeps real heat demand in charge: when the
 // house asks for more than the guard needs, the guard changes nothing and the
 // dispatcher is left entirely alone.
-//
-// Demand has to rise along with the request, because the request is separately
-// capped at rated_power * f / demand_max further down the chain and would
-// otherwise be clamped straight back below the low-load threshold.
-inline Plan plan_request(bool active, int raw_demand, float model_requested_w, float level1_thermal_w, float rated_w,
-                         int demand_max_f) {
+inline Plan plan_request(bool active, float model_requested_w, float level1_thermal_w) {
   Plan out;
-  out.demand = raw_demand;
   if (!active) return out;
   out.requested_w = requested_power_w(level1_thermal_w);
   // Ownership is decided against level 1 itself, never against the inflated
@@ -180,10 +173,6 @@ inline Plan plan_request(bool active, int raw_demand, float model_requested_w, f
   // rule is that the guard acts only while the house wants less than one
   // compressor at level 1 - above that the dispatcher is left entirely alone.
   out.owns_request = !std::isfinite(model_requested_w) || model_requested_w < level1_or_default(level1_thermal_w);
-  int needed = 1;
-  if (std::isfinite(rated_w) && rated_w > 0.0f && demand_max_f > 0)
-    needed = static_cast<int>(std::ceil(demand_max_f * (out.requested_w / rated_w)));
-  out.demand = std::max(raw_demand, std::max(1, std::min(demand_max_f, needed)));
   return out;
 }
 
