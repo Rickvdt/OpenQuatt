@@ -132,14 +132,17 @@ void test_defrost_threshold_preserves_recovery_and_electrical_boundaries() {
   // Its boundary is strictly above 4250 W, rather than the normal 4675 W.
   limits.defrost_boost_min_w = 4250;
   limits.defrost_boost_min_exclusive = true;
+  // Running units hold their levels through a defrost, so the boost gate no
+  // longer raises HP2 here; the gate itself is checked directly below.
   out = decide_dispatch(in, limits, {});
-  assert(out.hp1_level == 1 && out.hp2_level == 2 && out.reason == Reason::DEFROST_BOOST);
-  assert(std::fabs(out.expected_w - 4818.4f) < 0.01f);
+  assert(out.hp1_level == 1 && out.hp2_level == 1 && out.reason == Reason::DEFROST_HOLD);
+  assert(std::fabs(out.expected_w - 3918.4f) < 0.01f);
   in.requested_w = limit_request_w(4300, request_limit_w(17000, 5, 20));
   assert(in.requested_w == limits.defrost_boost_min_w);
-  assert(decide_dispatch(in, limits, {}).reason != Reason::DEFROST_BOOST);
+  assert(!defrost_boost_demand_allowed(in.requested_w, limits));
   in.requested_w = limit_request_w(4300, request_limit_w(17000, 6, 20));
-  assert(decide_dispatch(in, limits, {}).reason == Reason::DEFROST_BOOST);
+  assert(defrost_boost_demand_allowed(in.requested_w, limits));
+  assert(decide_dispatch(in, limits, {}).reason == Reason::DEFROST_HOLD);
   assert(!defrost_boost_demand_allowed(4250, limits));
   assert(defrost_boost_demand_allowed(std::nextafter(4250.0f, INFINITY), limits));
   for (float bad : {NAN, INFINITY, -INFINITY, -1.0f, 0.0f}) assert(!defrost_boost_demand_allowed(bad, limits));
