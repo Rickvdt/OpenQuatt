@@ -329,6 +329,8 @@ De V1/V1.5-kaart van Quatt begint bij 35 °C water. Bij lagere watertemperaturen
 
 Draait bij `Duo` maar één compressor, dan blijft de pomp van de stilstaande warmtepomp meedraaien. De vergelijking tussen één en twee warmtepompen telt dat verbruik mee: het basisverbruik van die warmtepomp plus het vermogen dat haar pomp zelf meldt, typisch 30-40 W. Bodemplaat- en carterverwarming tellen niet mee, want die hangen niet af van hoeveel warmtepompen draaien. Bij een start vanuit stilstand draait nog geen pomp en telt dit verbruik nog niet mee. De stroomlimiet rekent zonder dat verbruik.
 
+Ontdooit een draaiende warmtepomp, dan houden beide warmtepompen hun stand vast. Dat begint zodra de warmtepomp echt ontdooit (de vierwegklep is omgezet) en duurt tot drie minuten na het ontdooien, zodat de warmtepomp eerst weer op gang komt. Het systeem levert dan een paar minuten wat minder warmte. De andere warmtepomp gaat niet harder draaien om dat op te vangen: rond het vriespunt zou die daardoor zelf sneller bevriezen en kort daarna ook moeten ontdooien. Er start in die tijd ook geen warmtepomp bij en er stopt er geen. Daalt de warmtevraag duidelijk, of is de huidige stand niet meer toegestaan (stille modus, piekstroomlimiet), dan gaan de draaiende warmtepompen wel terug in stand. Beveiligingen en het wegvallen van de warmtevraag blijven voorgaan; de zachte stroomlimiet telt tijdens het ontdooien niet.
+
 ## Langer doorverwarmen (optioneel)
 
 Power House berekent continu hoeveel warmte je woning nodig heeft. **Langer doorverwarmen** bepaalt alleen hoe een bestaande verwarmingsrun bij heel weinig vraag mag doorgaan en daarna opnieuw mag beginnen. De functie staat standaard uit.

@@ -142,9 +142,19 @@ richting lagere aanvoer (25 ≥ 30 ≥ 35 °C). Vanaf 35 °C is de kaart ongewij
 Bij geldige flow en inlaattemperatuur voorspelt het model de waterketen
 HP1 → HP2: de uitlaat van HP1 wordt de inlaat voor HP2. Bij ontbrekende
 watermetingen bestaat een terugvalpad, waaronder de eigen verse uitlaattemperatuur
-van een draaiende ODU. Defrost beïnvloedt de beschikbare capaciteit; extra
-compensatie volgt alleen wanneer de combinatie anders tekortschiet. Een tekort
-is input voor supervisory, geen directe ketel- of HP-write.
+van een draaiende ODU. Defrost beïnvloedt de beschikbare capaciteit. Zolang bij een
+draaiende unit de vierwegklep omgezet is, en `kDefrostHoldMs` (3 min) daarna,
+houdt de dispatcher de levels van beide units vast (`defrost_hold`): geen hoger
+level, geen start of stop en geen topologiewissel. De klepstand telt alleen bij
+een online unit met een vers statusregister. De defrostvlag van de ODU, die
+minuten eerder komt, start de hold niet, en een unit die offline gaat start geen
+staart. Levert het vastgehouden paar meer dan de tie band boven het doel, of is
+het niet meer geldig (frequentiecap, peak-limiet), dan zakken de draaiende units
+naar de lagere levels die het doel het dichtst benaderen. Pas als zo'n combinatie
+niet bestaat (must-stop) of bij een vraag van nul geldt de normale keuze; de
+soft-limiet heft de hold niet op. Tijdens de hold vuurt de defrostboost niet.
+De loop guard (`pin_request`) draait na de dispatcher en gaat ook tijdens de hold voor.
+Een tekort is input voor supervisory, geen directe ketel- of HP-write.
 
 ## Water Temperature Control: eerst een aanvoerdoel
 

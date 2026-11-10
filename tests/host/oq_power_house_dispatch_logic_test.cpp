@@ -401,6 +401,174 @@ void test_stopped_unit_in_efficiency_only() {
   mono.hp1.levels[4].electrical_w = 1000.0f;
   assert(make_candidate(mono, cfg, 4, 0, 4000.0f).electrical_w == 1000.0f);
 }
+void test_running_units_hold_through_a_defrost() {
+  // Duo 2+2 on a 4 kW request. The runtime derates a unit whose valve has reversed, which makes the
+  // optimiser reach for a higher level on the other unit and trade the defrosting one away.
+  const auto duo = [](bool hp2_flag, bool hp2_valve) {
+    auto in = input(true);
+    in.requested_w = 4000.0f;
+    in.hp1.candidate.previous_applied_level = 2;
+    in.hp2.candidate.previous_applied_level = 2;
+    in.hp2.defrost = hp2_flag;
+    in.hp2.valve_defrost = hp2_valve;
+    if (hp2_valve)
+      for (int level = 1; level <= kMaxLevel; ++level) in.hp2.levels[level].thermal_w *= 0.764f;
+    return in;
+  };
+  const auto cfg = tuning();
+  // Without a reversed valve the optimiser does move away from 2+2 on this derated input, also while
+  // the ODU has only flagged the coming defrost: until the valve turns the unit still heats.
+  for (const bool flag : {false, true}) {
+    auto in = duo(flag, false);
+    for (int level = 1; level <= kMaxLevel; ++level) in.hp2.levels[level].thermal_w *= 0.764f;
+    const auto out = decide_dispatch(in, cfg, {});
+    assert((out.hp1_level != 2 || out.hp2_level != 2) && out.reason != Reason::DEFROST_HOLD);
+  }
+  // Reversed: both units keep their level, and the one-step boost does not fire either.
+  auto in = duo(true, true);
+  auto out = decide_dispatch(in, cfg, {});
+  assert(out.hp1_level == 2 && out.hp2_level == 2 && out.reason == Reason::DEFROST_HOLD);
+  expect_safe(out, in, cfg);
+  in.requested_w = 6000.0f;
+  out = decide_dispatch(in, cfg, {});
+  assert(out.hp1_level == 2 && out.hp2_level == 2 && out.reason == Reason::DEFROST_HOLD);
+
+  // The whole morning sequence at one-minute ticks: HP2 defrosts, then HP1 straight after. Nothing
+  // moves, and the pair is still 2+2 once both are done.
+  {
+    int hp1 = 2, hp2 = 2;
+    DispatchState state{};
+    uint32_t now_ms = 60000;
+    const bool valves[][2] = {{false, true}, {false, true}, {false, true},  {false, false}, {true, false},
+                              {true, false}, {true, false}, {false, false}, {false, false}, {false, false}};
+    for (const auto& valve : valves) {
+      in = input(true);
+      in.now_ms = now_ms;
+      in.requested_w = 4000.0f;
+      in.hp1.candidate.previous_applied_level = hp1;
+      in.hp2.candidate.previous_applied_level = hp2;
+      in.hp1.valve_defrost = valve[0];
+      in.hp2.valve_defrost = valve[1];
+      for (auto* selected : {&in.hp1, &in.hp2})
+        if (selected->valve_defrost)
+          for (int level = 1; level <= kMaxLevel; ++level) selected->levels[level].thermal_w *= 0.764f;
+      state = observe_protection(state, {now_ms, valve[0], valve[1], false, hp1, hp2});
+      out = decide_dispatch(in, cfg, state);
+      hp1 = out.hp1_level;
+      hp2 = out.hp2_level;
+      assert(hp1 == 2 && hp2 == 2);
+      now_ms += 60000;
+    }
+  }
+
+  // The hold runs on for the restart tail after the valve returns, then releases. A request that has
+  // risen meanwhile is only followed once the tail is over.
+  {
+    DispatchState state = observe_protection({}, {60000, false, true, false, 2, 2});
+    in = duo(false, false);
+    in.requested_w = 5000.0f;
+    for (uint32_t after_ms : {0U, 60000U, 120000U, 179000U, 180000U}) {
+      in.now_ms = 120000 + after_ms;
+      state = observe_protection(state, {in.now_ms, false, false, false, 2, 2});
+      out = decide_dispatch(in, cfg, state);
+      if (after_ms < kDefrostHoldMs)
+        assert(out.hp1_level == 2 && out.hp2_level == 2 && out.reason == Reason::DEFROST_HOLD);
+      else
+        assert(out.reason != Reason::DEFROST_HOLD && out.hp1_level + out.hp2_level == 5);
+    }
+    // The tail belongs to a running unit: once the defrosted unit has stopped there is nothing to hold.
+    in.hp2.candidate.previous_applied_level = 0;
+    in.hp1.candidate.previous_applied_level = 3;
+    in.requested_w = 4000.0f;
+    in.now_ms = 120000;
+    state = observe_protection(observe_protection({}, {60000, false, true, false, 3, 2}),
+                               {120000, false, false, false, 3, 0});
+    assert(decide_dispatch(in, cfg, state).reason != Reason::DEFROST_HOLD);
+    // A unit that drops off mid-defrost loses its valve state; that is not a returning valve, so there
+    // is no tail to hold on.
+    in = duo(false, false);
+    in.requested_w = 5000.0f;
+    in.now_ms = 120000;
+    state = observe_protection(observe_protection({}, {60000, false, true, false, 2, 2}),
+                               {120000, false, false, false, 2, 2, true, false});
+    assert(!tail_active(state.hp2_defrost, 120000, kDefrostHoldMs));
+    assert(decide_dispatch(in, cfg, state).reason != Reason::DEFROST_HOLD);
+    // Back online with the valve still reversed: the hold resumes.
+    state = observe_protection(state, {130000, false, true, false, 2, 2});
+    assert(tail_active(state.hp2_defrost, 130000, kDefrostHoldMs));
+  }
+
+  // When the held pair delivers well over the request, the hold sheds to the lower levels that come
+  // closest, without stopping either unit. A small surplus is left alone.
+  in = duo(true, true);
+  in.requested_w = 2000.0f;
+  out = decide_dispatch(in, cfg, {});
+  assert(out.hp1_level == 1 && out.hp2_level == 1 && out.reason == Reason::DEFROST_HOLD);
+  in.requested_w = 3450.0f;  // 2+2 delivers 3528 W
+  out = decide_dispatch(in, cfg, {});
+  assert(out.hp1_level == 2 && out.hp2_level == 2 && out.reason == Reason::DEFROST_HOLD);
+
+  // One unit running in a Duo defrosts: it keeps its level and the other is not started to cover it.
+  in = input(true);
+  in.requested_w = 3000.0f;
+  in.hp1.candidate.previous_applied_level = 3;
+  in.hp1.defrost = in.hp1.valve_defrost = true;
+  for (int level = 1; level <= kMaxLevel; ++level) in.hp1.levels[level].thermal_w *= 0.764f;
+  out = decide_dispatch(in, cfg, {});
+  assert(out.hp1_level == 3 && out.hp2_level == 0 && out.reason == Reason::DEFROST_HOLD);
+
+  // A unit that is not running does not freeze anything with a stale flag or valve.
+  in = input(true);
+  in.requested_w = 2000.0f;
+  in.hp1.candidate.previous_applied_level = 3;
+  in.hp2.defrost = in.hp2.valve_defrost = true;
+  out = decide_dispatch(in, cfg, {});
+  assert(out.reason != Reason::DEFROST_HOLD && out.hp1_level + out.hp2_level == 2);
+
+  // The soft limit does not touch the hold. The peak limit lowers the held levels until they fit, and
+  // releases the hold only when not even the lowest levels of the running units fit.
+  in = duo(true, true);
+  auto limited = cfg;
+  limited.soft_limit_w = 350.0f;  // 2+2 draws 400 W
+  out = decide_dispatch(in, limited, {});
+  assert(out.hp1_level == 2 && out.hp2_level == 2 && out.reason == Reason::DEFROST_HOLD);
+  limited.peak_limit_w = 350.0f;
+  out = decide_dispatch(in, limited, {});
+  assert(out.reason == Reason::DEFROST_HOLD && out.hp1_level >= 1 && out.hp2_level >= 1);
+  assert(out.hp1_level + out.hp2_level == 3);
+  expect_safe(out, in, limited);
+  limited.soft_limit_w = limited.peak_limit_w = 150.0f;  // 1+1 draws 200 W
+  out = decide_dispatch(in, limited, {});
+  assert(out.reason != Reason::DEFROST_HOLD);
+  expect_safe(out, in, limited);
+
+  // A frequency cap (silent mode, an excluded band) likewise lowers the held unit instead of handing
+  // the load to the other one. A single that defrosts stays the single.
+  in = input(true);
+  in.requested_w = 5000.0f;
+  in.hp1.candidate.previous_applied_level = 3;
+  in.hp1.valve_defrost = true;
+  for (int level = 1; level <= kMaxLevel; ++level) {
+    in.hp1.levels[level].thermal_w *= 0.55f;
+    if (level >= 3) in.hp1.levels[level].allowed = in.hp2.levels[level].allowed = false;
+  }
+  out = decide_dispatch(in, cfg, {});
+  assert(out.hp1_level == 2 && out.hp2_level == 0 && out.reason == Reason::DEFROST_HOLD);
+  // In Duo the capped unit goes down and the defrosting one is not traded or raised.
+  in = duo(false, true);
+  in.hp1.levels[2].allowed = false;
+  out = decide_dispatch(in, cfg, {});
+  assert(out.hp1_level == 1 && out.hp2_level == 2 && out.reason == Reason::DEFROST_HOLD);
+  in = duo(true, true);
+  in.hp2.candidate.must_stop = true;
+  out = decide_dispatch(in, cfg, {});
+  assert(out.hp2_level == 0);
+  expect_safe(out, in, cfg);
+  in = duo(true, true);
+  in.requested_w = 0.0f;
+  out = decide_dispatch(in, cfg, {});
+  assert(out.hp1_level == 0 && out.hp2_level == 0);
+}
 void test_owner_holds_while_standby_follows_the_running_state() {
   // Closed loop: every tick feeds back the levels it chose and sets each unit's standby draw from its
   // state, as the runtime does. A unit's own pump runs at a slightly different power while it heats than
@@ -455,6 +623,7 @@ int main() {
   test_single_and_failures();
   test_duo_holds_and_boost();
   test_stopped_unit_in_efficiency_only();
+  test_running_units_hold_through_a_defrost();
   test_owner_holds_while_standby_follows_the_running_state();
   test_unusable_standby_counts_nothing();
   return 0;

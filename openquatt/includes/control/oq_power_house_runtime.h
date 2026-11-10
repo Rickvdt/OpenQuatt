@@ -11,6 +11,7 @@
 #include "../performance/oq_energy_logic.h"
 #include "../performance/oq_water_performance_runtime.h"
 #include "oq_compressor_frequency_runtime.h"
+#include "oq_defrost_logic.h"
 #include "oq_heat_intent_runtime.h"
 #include "oq_boot_resume_runtime.h"
 #include "esphome/components/openquatt_incident_manager/OpenQuattRestartHandoff.h"
@@ -109,20 +110,29 @@ class Runtime {
     const float effective_target_c = warmup.effective_c;
     const bool warming = warmup.limited;
     if (id(oq_strategy_output_source_code) != 3) this->dispatch_state_ = {};
-    const bool hp1_valve_defrost = id(hp1_4_way_valve).state;
+    // A reversed valve only counts while the unit is online and its status register is fresh: the binary
+    // sensor keeps its last state when a unit drops off, and the dispatcher holds both units on it.
+    const uint64_t valve_observation_ms = oq_sources::monotonic_ms();
+    const bool hp1_valve_defrost = oq_defrost::duo_staging_observation(id(hp1_is_online), oq_sources::hp1.status_2108,
+                                                                       oq_sources::hp1.defrost, valve_observation_ms)
+                                       .valve_active;
     const bool hp1_oil_return = id(hp1_prot_oil_return).state;
 #if OQ_TOPOLOGY_DUO
-    const bool hp2_valve_defrost = id(hp2_4_way_valve).state;
+    const bool hp2_valve_defrost = oq_defrost::duo_staging_observation(id(hp2_is_online), oq_sources::hp2.status_2108,
+                                                                       oq_sources::hp2.defrost, valve_observation_ms)
+                                       .valve_active;
     const bool hp2_oil_return = id(hp2_prot_oil_return).state;
     const int hp2_applied_level = id(hp2_last_applied_level);
+    const bool hp2_online = id(hp2_is_online);
 #else
     const bool hp2_valve_defrost = false;
     const bool hp2_oil_return = false;
     const int hp2_applied_level = 0;
+    const bool hp2_online = true;
 #endif
     this->dispatch_state_ = oq_power_house_dispatch::observe_protection(
         this->dispatch_state_, {now_ms, hp1_valve_defrost, hp2_valve_defrost, hp1_oil_return || hp2_oil_return,
-                                id(hp1_last_applied_level), hp2_applied_level});
+                                id(hp1_last_applied_level), hp2_applied_level, id(hp1_is_online), hp2_online});
 
     const auto cadence = oq_power_house::decide_cadence(now_ms, id(oq_ph_request_last_loop_ms), config.loop_ms);
     if (config.loop_ms == 0 || (!cadence.due && this->startup_phase_ == oq_power_house::StartupPhase::READY)) return;

@@ -68,6 +68,7 @@ struct ProtectionObservation {
   uint32_t now_ms = 0;
   bool hp1_valve_defrost = false, hp2_valve_defrost = false, oil_return = false;
   int hp1_applied_level = 0, hp2_applied_level = 0;
+  bool hp1_online = true, hp2_online = true;
 };
 struct DispatchInput {
   uint32_t now_ms = 0;
@@ -168,8 +169,15 @@ inline bool tail_active(const TimedTail& tail, uint32_t now_ms, uint32_t duratio
          (tail.armed && duration_ms > 0 && static_cast<uint32_t>(now_ms - tail.started_ms) < duration_ms);
 }
 inline DispatchState observe_protection(DispatchState state, const ProtectionObservation& observation) {
-  observe_tail(state.hp1_defrost, observation.hp1_valve_defrost, observation.now_ms, kDefrostHoldMs);
-  observe_tail(state.hp2_defrost, observation.hp2_valve_defrost, observation.now_ms, kDefrostHoldMs);
+  // A unit that drops off has no valve state: losing it is not the end of a defrost, so no tail.
+  if (observation.hp1_online)
+    observe_tail(state.hp1_defrost, observation.hp1_valve_defrost, observation.now_ms, kDefrostHoldMs);
+  else
+    state.hp1_defrost = {};
+  if (observation.hp2_online)
+    observe_tail(state.hp2_defrost, observation.hp2_valve_defrost, observation.now_ms, kDefrostHoldMs);
+  else
+    state.hp2_defrost = {};
   observe_tail(state.oil_return, observation.oil_return, observation.now_ms, kOilReturnHoldMs);
   if (state.topology_hold_armed &&
       static_cast<uint32_t>(observation.now_ms - state.topology_hold_started_ms) >= kTopologyHoldMs)
@@ -414,6 +422,17 @@ inline DispatchDecision decide_dispatch(const DispatchInput& in, const DispatchT
       best = duo;
     const Candidate current = make_candidate(in, tuning, applied_level(in.hp1), applied_level(in.hp2), target_w);
     const bool valve_defrost = in.hp1.valve_defrost || in.hp2.valve_defrost;
+    // A defrost is over in minutes and the unit then resumes where it was. Chasing the missing heat costs
+    // more than it returns: the other unit pushed to a high frequency near freezing ices up and needs its
+    // own defrost next, and a defrosting unit that was traded away stops afterwards and has to restart.
+    // So while a running unit's valve is reversed, and for the restart tail after, both units keep their
+    // levels (see the hold below). The ODU's earlier defrost flag is left out: until the valve turns the
+    // unit still heats normally.
+    const auto defrost_window = [&](const HpInput& hp, const TimedTail& tail) {
+      return applied_level(hp) > 0 && (hp.valve_defrost || tail_active(tail, in.now_ms, kDefrostHoldMs));
+    };
+    const bool defrost_hold_window =
+        defrost_window(in.hp1, state.hp1_defrost) || defrost_window(in.hp2, state.hp2_defrost);
     if (valve_defrost && topology(current.hp1_level, current.hp2_level) == 1 && single.valid && have_best &&
         best.active_count == 2)
       best = single;
@@ -453,7 +472,7 @@ inline DispatchDecision decide_dispatch(const DispatchInput& in, const DispatchT
     }
     Candidate chosen = keep_current && current.valid ? current : best;
     const int boost_steps = std::max(0, std::min(3, tuning.defrost_boost_steps));
-    if (chosen.valid && chosen.active_count == 2 && boost_steps > 0 &&
+    if (chosen.valid && chosen.active_count == 2 && boost_steps > 0 && !defrost_hold_window &&
         defrost_boost_demand_allowed(in.requested_w, tuning) && chosen.thermal_w + tie_band_w < target_w &&
         (in.hp1.valve_defrost != in.hp2.valve_defrost)) {
       for (int step = boost_steps; step > 0; --step) {
@@ -465,6 +484,27 @@ inline DispatchDecision decide_dispatch(const DispatchInput& in, const DispatchT
           reason = Reason::DEFROST_BOOST;
           break;
         }
+      }
+    }
+    // The defrost hold: never start or stop a unit, never raise a level. It only sheds: when the held pair
+    // delivers more than the target (the request or the measured power guard dropped), or when its levels
+    // are no longer allowed (a frequency cap, the peak limit). The running units then take the lower
+    // levels that come closest to the target. Only when no such levels exist, as on a must-stop, does the
+    // normal choice below take over.
+    if (defrost_hold_window) {
+      Candidate held = current;
+      if (!current.valid || current.thermal_w > target_w + tie_band_w)
+        for (int hp1 = current.hp1_level > 0 ? 1 : 0; hp1 <= current.hp1_level; ++hp1)
+          for (int hp2 = current.hp2_level > 0 ? 1 : 0; hp2 <= current.hp2_level; ++hp2) {
+            const auto lowered = make_candidate(in, tuning, hp1, hp2, target_w);
+            if (lowered.valid &&
+                (!held.valid || lowered.error_w + 1.0f < held.error_w ||
+                 (std::fabs(lowered.error_w - held.error_w) <= 1.0f && better_candidate(lowered, held))))
+              held = lowered;
+          }
+      if (held.valid) {
+        finish(held, Reason::DEFROST_HOLD);
+        return out;
       }
     }
     if (chosen.valid && chosen.active_count == 1 && applied_level(in.hp1) <= 0 && applied_level(in.hp2) <= 0 &&
