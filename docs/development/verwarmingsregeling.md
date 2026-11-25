@@ -158,6 +158,16 @@ soft-limiet heft de hold niet op. Tijdens de hold vuurt de defrostboost niet.
 De loop guard (`pin_request`) draait na de dispatcher en gaat ook tijdens de hold voor.
 Een tekort is input voor supervisory, geen directe ketel- of HP-write.
 
+Met `DispatchTuning::balanced_pairs` liggen Duo-paren hoogstens `kMaxPairSpread`
+(1) level uit elkaar. De runtime zet dit alleen bij twee units van dezelfde variant;
+bij verschillende leveltabellen zegt een levelverschil niets. De regel geldt in
+`pick_topology`, `dispatch_capacity`, `minimum_active_candidate`, de defrostboost
+en het afschalen tijdens de defrost-hold. Een toegepast paar buiten de regel wordt
+niet vastgehouden; alleen de defrost-hold houdt het zoals het is. Sluiten holds
+elk toegestaan paar uit, dan blijft het toegepaste paar staan (`keep_current`)
+in plaats van geen commando. Het vasthouden van een unit met een verdachte link
+staat boven de regel.
+
 ## Water Temperature Control: eerst een aanvoerdoel
 
 1. Filter de geselecteerde buitentemperatuur en interpoleer tussen de zes

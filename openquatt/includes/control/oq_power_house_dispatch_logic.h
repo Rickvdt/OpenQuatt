@@ -10,6 +10,10 @@
 
 namespace oq_power_house_dispatch {
 constexpr int kMaxLevel = 20;
+// With DispatchTuning::balanced_pairs, Duo pairs stay at most one level apart, as the CiC does: the
+// dispatcher never chooses 1+3. Safety paths (a suspect unit, a running defrost, holds that rule out every
+// permitted pair) keep whatever pair is applied.
+constexpr int kMaxPairSpread = 1;
 constexpr uint32_t kTopologyHoldMs = 180000, kDefrostHoldMs = 180000, kOilReturnHoldMs = 120000;
 // clang-format off
 enum class Reason : uint8_t {
@@ -133,8 +137,15 @@ struct DispatchTuning {
   // Must not depend on which unit runs now, or the cost a switch was decided on changes with the switch.
   // NAN or negative counts as nothing.
   float hp1_standby_w = 0.0f, hp2_standby_w = 0.0f;
+  // Keep Duo pairs at most kMaxPairSpread levels apart. Only meaningful when both units share one level
+  // table, so the runtime sets it for two units of the same variant.
+  bool balanced_pairs = false;
 };
 
+inline bool pair_spread_ok(const DispatchTuning& tuning, int hp1_level, int hp2_level) {
+  return !tuning.balanced_pairs || hp1_level <= 0 || hp2_level <= 0 ||
+         std::abs(hp1_level - hp2_level) <= kMaxPairSpread;
+}
 inline bool defrost_boost_demand_allowed(float requested_w, const DispatchTuning& tuning) {
   if (!std::isfinite(requested_w) || requested_w <= 0.0f || !std::isfinite(tuning.defrost_boost_min_w) ||
       tuning.defrost_boost_min_w < 0.0f)
@@ -362,7 +373,7 @@ inline Candidate minimum_active_candidate(const DispatchInput& in, const Dispatc
   for (int first = 0; first <= hp1_max; ++first) {
     for (int second = 0; second <= hp2_max; ++second) {
       // Extension may retain active units, never borrow the minimum of an idle peer.
-      if (!preserves_active_topology(in, first, second)) continue;
+      if (!preserves_active_topology(in, first, second) || !pair_spread_ok(tuning, first, second)) continue;
       const auto candidate = make_candidate(in, tuning, first, second, 0.0f);
       if (!candidate.valid || candidate.active_count == 0 || candidate.thermal_w <= 0.0f) continue;
       const int highest_level = std::max(first, second);
@@ -424,14 +435,14 @@ inline Candidate pick_topology(const DispatchInput& in, const DispatchTuning& tu
   };
   for (int hp1 = 0; hp1 <= kMaxLevel; ++hp1)
     for (int hp2 = 0; hp2 <= (in.duo ? kMaxLevel : 0); ++hp2) {
-      if (topology(hp1, hp2) != active_count) continue;
+      if (topology(hp1, hp2) != active_count || !pair_spread_ok(tuning, hp1, hp2)) continue;
       const auto candidate = make_candidate(in, tuning, hp1, hp2, target_w);
       if (candidate.valid && candidate.active_count == active_count && sufficient(candidate))
         best_error_w = std::min(best_error_w, candidate.error_w);
     }
   for (int hp1 = 0; hp1 <= kMaxLevel; ++hp1)
     for (int hp2 = 0; hp2 <= (in.duo ? kMaxLevel : 0); ++hp2) {
-      if (topology(hp1, hp2) != active_count) continue;
+      if (topology(hp1, hp2) != active_count || !pair_spread_ok(tuning, hp1, hp2)) continue;
       const auto candidate = make_candidate(in, tuning, hp1, hp2, target_w);
       if (candidate.valid && candidate.active_count == active_count && candidate.error_w <= best_error_w + tie_band_w &&
           sufficient(candidate) && (!chosen.valid || better_candidate(candidate, chosen)))
@@ -511,7 +522,8 @@ inline float dispatch_capacity(const DispatchInput& in, const DispatchTuning& tu
     for (int hp2 = 0; hp2 <= (in.duo ? kMaxLevel : 0); ++hp2) {
       const auto candidate = make_candidate(in, tuning, hp1, hp2, 0.0f);
       if (model_available && candidate.active_count > 0 && candidate.model_valid) *model_available = true;
-      if (candidate.valid && candidate.thermal_w > capacity_w) capacity_w = candidate.thermal_w;
+      if (candidate.valid && pair_spread_ok(tuning, hp1, hp2) && candidate.thermal_w > capacity_w)
+        capacity_w = candidate.thermal_w;
     }
   return capacity_w;
 }
@@ -633,7 +645,11 @@ inline DispatchDecision decide_dispatch(const DispatchInput& in, const DispatchT
       best = single;
     else if (duo.valid)
       best = duo;
-    const Candidate current = make_candidate(in, tuning, applied_level(in.hp1), applied_level(in.hp2), target_w);
+    const Candidate applied = make_candidate(in, tuning, applied_level(in.hp1), applied_level(in.hp2), target_w);
+    // An applied pair further apart than allowed is never kept; the choice below moves to a permitted
+    // pair. Only the defrost hold keeps it as it is.
+    Candidate current = applied;
+    if (!pair_spread_ok(tuning, applied.hp1_level, applied.hp2_level)) current.valid = false;
     const bool valve_defrost = in.hp1.valve_defrost || in.hp2.valve_defrost;
     // A defrost is over in minutes and the unit then resumes where it was. Chasing the missing heat costs
     // more than it returns: the other unit pushed to a high frequency near freezing ices up and needs its
@@ -684,6 +700,10 @@ inline DispatchDecision decide_dispatch(const DispatchInput& in, const DispatchT
       reason = keep_current ? Reason::KEEP_CURRENT : Reason::NO_CANDIDATE;
     }
     Candidate chosen = keep_current && current.valid ? current : best;
+    // The spread rule never leaves the units without a command: when holds rule out every permitted pair,
+    // the applied pair stays until they end.
+    if (!chosen.valid && !current.valid && applied.valid && applied.active_count > 0)
+      chosen = applied, reason = Reason::KEEP_CURRENT;
     // Before starting the other HP, give the held Single a chance to cover
     // the full request on its current command or a safe higher command.
     const auto& running = current.hp1_level > 0 ? in.hp1 : in.hp2;
@@ -725,7 +745,7 @@ inline DispatchDecision decide_dispatch(const DispatchInput& in, const DispatchT
         const int hp1 = in.hp2.valve_defrost ? std::min(kMaxLevel, chosen.hp1_level + step) : chosen.hp1_level;
         const int hp2 = in.hp1.valve_defrost ? std::min(kMaxLevel, chosen.hp2_level + step) : chosen.hp2_level;
         const auto boosted = make_candidate(in, tuning, hp1, hp2, target_w);
-        if (boosted.valid && (hp1 > chosen.hp1_level || hp2 > chosen.hp2_level)) {
+        if (boosted.valid && pair_spread_ok(tuning, hp1, hp2) && (hp1 > chosen.hp1_level || hp2 > chosen.hp2_level)) {
           chosen = boosted;
           reason = Reason::DEFROST_BOOST;
           break;
@@ -738,12 +758,12 @@ inline DispatchDecision decide_dispatch(const DispatchInput& in, const DispatchT
     // levels that come closest to the target. Only when no such levels exist, as on a must-stop, does the
     // normal choice below take over.
     if (defrost_hold_window) {
-      Candidate held = current;
-      if (!current.valid || current.thermal_w > target_w + tie_band_w)
-        for (int hp1 = current.hp1_level > 0 ? 1 : 0; hp1 <= current.hp1_level; ++hp1)
-          for (int hp2 = current.hp2_level > 0 ? 1 : 0; hp2 <= current.hp2_level; ++hp2) {
+      Candidate held = applied;
+      if (!applied.valid || applied.thermal_w > target_w + tie_band_w)
+        for (int hp1 = applied.hp1_level > 0 ? 1 : 0; hp1 <= applied.hp1_level; ++hp1)
+          for (int hp2 = applied.hp2_level > 0 ? 1 : 0; hp2 <= applied.hp2_level; ++hp2) {
             const auto lowered = make_candidate(in, tuning, hp1, hp2, target_w);
-            if (lowered.valid &&
+            if (lowered.valid && pair_spread_ok(tuning, hp1, hp2) &&
                 (!held.valid || lowered.error_w + 1.0f < held.error_w ||
                  (std::fabs(lowered.error_w - held.error_w) <= 1.0f && better_candidate(lowered, held))))
               held = lowered;
