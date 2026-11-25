@@ -707,6 +707,85 @@ void test_unusable_standby_counts_nothing() {
     assert(out.hp1_level == plain.hp1_level && out.hp2_level == plain.hp2_level && out.reason == plain.reason);
   }
 }
+void test_balanced_pairs_stay_one_level_apart() {
+  const auto spread = [](const DispatchDecision& out) { return abs(out.hp1_level - out.hp2_level); };
+  auto off = tuning();
+  auto on = tuning();
+  on.balanced_pairs = true;
+
+  // A cheap HP1 step makes 3+1 the most efficient fit for 4 kW; the rule takes a permitted fit instead.
+  auto in = input(true);
+  in.requested_w = 4000.0f;
+  in.hp1.levels[3].electrical_w = 200.0f;
+  auto out = decide_dispatch(in, off, {});
+  assert(out.output_valid && out.hp1_level == 3 && out.hp2_level == 1);
+  out = decide_dispatch(in, on, {});
+  assert(out.output_valid && out.expected_w == 4000.0f &&
+         (out.hp1_level == 0 || out.hp2_level == 0 || spread(out) <= 1));
+  // With both units held running at 3+1, the rule moves them to 2+2.
+  in.hp1.candidate.previous_applied_level = 3;
+  in.hp2.candidate.previous_applied_level = 1;
+  in.hp1.stop_inhibited = in.hp2.stop_inhibited = true;
+  out = decide_dispatch(in, off, {});
+  assert(out.hp1_level == 3 && out.hp2_level == 1);
+  out = decide_dispatch(in, on, {});
+  assert(out.output_valid && out.hp1_level == 2 && out.hp2_level == 2);
+  assert(!pair_spread_ok(on, 3, 1) && pair_spread_ok(on, 3, 2) && pair_spread_ok(on, 3, 0) &&
+         pair_spread_ok(off, 3, 1));
+
+  // An applied pair further apart is not kept, also where it would otherwise be good enough.
+  in = input(true);
+  in.requested_w = 5000.0f;
+  in.hp1.candidate.previous_applied_level = 4;
+  in.hp2.candidate.previous_applied_level = 1;
+  out = decide_dispatch(in, off, {});
+  assert(out.hp1_level == 4 && out.hp2_level == 1);
+  out = decide_dispatch(in, on, {});
+  assert(out.output_valid && out.expected_w == 5000.0f &&
+         (out.hp1_level == 0 || out.hp2_level == 0 || spread(out) <= 1));
+
+  // A running defrost keeps the applied pair as it is: no reshuffle during the defrost.
+  in.hp1.valve_defrost = true;
+  out = decide_dispatch(in, on, {});
+  assert(out.hp1_level == 4 && out.hp2_level == 1 && out.reason == Reason::DEFROST_HOLD);
+  in.hp1.valve_defrost = false;
+
+  // Holds that rule out every permitted pair leave the applied pair in place rather than no command.
+  in.hp1.feedback_hold_level = 4;
+  in.hp2.feedback_hold_level = 1;
+  in.hp1.stop_inhibited = in.hp2.stop_inhibited = true;
+  out = decide_dispatch(in, on, {});
+  assert(out.output_valid && out.hp1_level == 4 && out.hp2_level == 1 && out.reason == Reason::KEEP_CURRENT);
+
+  // Capacity and the run-extension minimum only count permitted pairs.
+  in = input(true);
+  in.requested_w = 20000.0f;
+  for (int level = 3; level <= 10; ++level) in.hp2.levels[level].allowed = false;
+  assert(decide_dispatch(in, off, {}).capacity_w == 12000.0f);
+  out = decide_dispatch(in, on, {});
+  // With HP2 capped at level 2 the best pair is 3+2 (5 kW); HP1 alone at level 10 delivers more.
+  assert(out.capacity_w == 10000.0f && out.hp1_level == 10 && out.hp2_level == 0);
+  in = input(true);
+  in.hp1.candidate.previous_applied_level = in.hp2.candidate.previous_applied_level = 3;
+  in.hp1.levels[1].allowed = in.hp1.levels[2].allowed = false;
+  in.hp1.stop_inhibited = in.hp2.stop_inhibited = true;
+  assert(minimum_active_candidate(in, off).thermal_w == 4000.0f);
+  assert(minimum_active_candidate(in, on).thermal_w == 5000.0f);
+
+  // Sweep: from idle and from every balanced running pair, the choice is never further apart.
+  for (int first = 0; first <= 6; ++first)
+    for (int second = std::max(0, first - 1); second <= std::min(6, first + 1); ++second)
+      for (float request = 0.0f; request <= 14000.0f; request += 250.0f) {
+        in = input(true);
+        in.requested_w = request;
+        in.hp1.candidate.previous_applied_level = first;
+        in.hp2.candidate.previous_applied_level = second;
+        in.hp1.levels[3].electrical_w = 200.0f;
+        out = decide_dispatch(in, on, {});
+        expect_safe(out, in, on);
+        assert(spread(out) <= 1 || out.hp1_level == 0 || out.hp2_level == 0);
+      }
+}
 }  // namespace
 int main() {
   test_cold_weather_request_reaches_dispatch_and_deficit();
@@ -721,5 +800,6 @@ int main() {
   test_running_units_hold_through_a_defrost();
   test_owner_holds_while_standby_follows_the_running_state();
   test_unusable_standby_counts_nothing();
+  test_balanced_pairs_stay_one_level_apart();
   return 0;
 }

@@ -384,6 +384,8 @@ class Runtime {
     if (duo) {
       dispatch_tuning.hp1_standby_w = standby_w(true);
       dispatch_tuning.hp2_standby_w = standby_w(false);
+      // Same variant, same level table: then "one level apart" is the same compressor step on both units.
+      dispatch_tuning.balanced_pairs = frequency.performance_variant(true) == frequency.performance_variant(false);
     }
     float minimum_viable_w = NAN;
     int minimum_viable_level = 0;
