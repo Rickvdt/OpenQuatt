@@ -187,9 +187,12 @@ void test_peer_defrost_allows_modulation_during_feedback_hold() {
   const auto held = decide_dispatch(in, limits, {});
   assert(held.output_valid && held.hp1_level == 2 && held.hp2_level == 1);
 
+  // Lifting the feedback hold no longer lets the peer rise here: while a running unit's valve is reversed
+  // the defrost hold keeps both levels, so the peer is not pushed up to cover the missing heat.
   in.hp2.feedback_hold_level = feedback.hold_level(1, true, true, false);
   const auto raised = decide_dispatch(in, limits, {});
-  assert(raised.output_valid && raised.hp1_level == 2 && raised.hp2_level == 2);
+  assert(raised.output_valid && raised.hp1_level == 2 && raised.hp2_level == 1 &&
+         raised.reason == Reason::DEFROST_HOLD);
 }
 void test_model_boundary_allows_lower_duo_levels() {
   using namespace oq_power_house_dispatch;
