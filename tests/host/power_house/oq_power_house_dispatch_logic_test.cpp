@@ -1586,6 +1586,109 @@ void test_balanced_pairs_stay_one_level_apart() {
         assert(spread(out) <= 1 || out.hp1_level == 0 || out.hp2_level == 0);
       }
 }
+// A model that rates one unit at level 7 cheaper than two at 3+4 for the same 4.2 kW, as the V1.5 map does.
+// bias_w is how much cheaper.
+DispatchInput high_single_bias(float bias_w) {
+  auto in = input(true);
+  for (auto* unit : {&in.hp1, &in.hp2}) {
+    for (int level = 0; level <= 10; ++level) {
+      unit->levels[level].thermal_w = 600.0f * level;
+      unit->levels[level].electrical_w = 100.0f * level;
+    }
+    unit->levels[7].electrical_w = 700.0f - bias_w;
+  }
+  in.requested_w = 4200.0f;
+  return in;
+}
+void test_duo_shortfall_takes_another_pair() {
+  // Running 1+2 falls short. The model prefers one unit at 7 by 100 W, less than the topology margin: the
+  // shortfall moves to another pair instead of stopping a unit. Also without balanced pairs.
+  for (bool balanced : {false, true}) {
+    auto cfg = tuning();
+    cfg.balanced_pairs = balanced;
+    auto in = high_single_bias(100.0f);
+    in.hp1.candidate.previous_applied_level = 1;
+    in.hp2.candidate.previous_applied_level = 2;
+    auto out = decide_dispatch(in, cfg, {});
+    assert(out.output_valid && out.reason == Reason::BETTER_HEAT && out.hp1_level > 0 && out.hp2_level > 0 &&
+           out.expected_w == 4200.0f);
+    // Leaving the Duo still happens once the margins are met: here one unit saves 200 W per the model.
+    if (!balanced) {
+      in = high_single_bias(200.0f);
+      in.hp1.candidate.previous_applied_level = 1;
+      in.hp2.candidate.previous_applied_level = 2;
+      out = decide_dispatch(in, cfg, {});
+      assert(out.output_valid && out.reason == Reason::BETTER_HEAT && out.hp1_level + out.hp2_level == 7 &&
+             (out.hp1_level == 0 || out.hp2_level == 0));
+    }
+  }
+}
+void test_balanced_pairs_keep_single_low() {
+  auto off = tuning();
+  auto on = tuning();
+  on.balanced_pairs = true;
+  const auto single_level = [](const DispatchDecision& out) {
+    return out.hp1_level > 0 && out.hp2_level > 0 ? 0 : std::max(out.hp1_level, out.hp2_level);
+  };
+  // The model rates 7+0 300 W cheaper than 3+4. Without the rule a running pair gives way to it.
+  auto in = high_single_bias(300.0f);
+  in.hp1.candidate.previous_applied_level = 3;
+  in.hp2.candidate.previous_applied_level = 4;
+  auto out = decide_dispatch(in, off, {});
+  assert(out.reason == Reason::LESS_POWER && single_level(out) == 7);
+  // With balanced pairs the pair stays.
+  out = decide_dispatch(in, on, {});
+  assert(out.output_valid && out.reason == Reason::KEEP_CURRENT && out.hp1_level == 3 && out.hp2_level == 4);
+  // A short 1+2 moves to a pair, not to one unit at 7 (26 Nov 12:48).
+  in.hp1.candidate.previous_applied_level = 1;
+  in.hp2.candidate.previous_applied_level = 2;
+  out = decide_dispatch(in, on, {});
+  assert(out.output_valid && out.hp1_level > 0 && out.hp2_level > 0 && abs(out.hp1_level - out.hp2_level) <= 1);
+  // A unit already running alone at 7 is joined by the other (26 Nov 13:43 onward).
+  in.hp1.candidate.previous_applied_level = 0;
+  in.hp2.candidate.previous_applied_level = 7;
+  out = decide_dispatch(in, on, {});
+  assert(out.output_valid && out.hp1_level > 0 && out.hp2_level > 0 && out.expected_w == 4200.0f);
+  // ... except while a hold pins it at 7: the pairs left then overshoot, so nothing is forced.
+  in.hp2.feedback_hold_level = 7;
+  out = decide_dispatch(in, on, {});
+  assert(out.output_valid && out.hp1_level == 0 && out.hp2_level == 7);
+  in.hp2.feedback_hold_level = 0;
+  // From idle the start also stays low.
+  in.hp2.candidate.previous_applied_level = 0;
+  out = decide_dispatch(in, on, {});
+  assert(out.output_valid && single_level(out) <= kBalancedSingleMaxLevel);
+  // Low demand: one unit at a low level is still fine.
+  in.requested_w = 1800.0f;
+  out = decide_dispatch(in, on, {});
+  assert(out.output_valid && out.expected_w == 1800.0f);
+  // Without a usable peer one unit runs as high as needed.
+  in = high_single_bias(300.0f);
+  in.hp2.candidate.available_for_start = false;
+  out = decide_dispatch(in, on, {});
+  assert(out.output_valid && out.hp1_level == 7 && out.hp2_level == 0);
+  // A held Single that cannot cover the request on a permitted level starts the peer instead of upshifting.
+  in = high_single_bias(300.0f);
+  in.hp1.candidate.previous_applied_level = 4;
+  in.hp1.feedback_hold_level = 4;
+  out = decide_dispatch(in, on, {});
+  assert(out.output_valid && single_level(out) <= kBalancedSingleMaxLevel);
+  // Sweep: whenever a permitted pair fits the request, one unit never runs above the limit.
+  for (int first = 0; first <= 10; ++first)
+    for (int second = 0; second <= 10; ++second) {
+      if (!pair_spread_ok(on, first, second)) continue;
+      for (float request = 1500.0f; request <= 9000.0f; request += 300.0f) {
+        in = high_single_bias(300.0f);
+        in.requested_w = request;
+        in.hp1.candidate.previous_applied_level = first;
+        in.hp2.candidate.previous_applied_level = second;
+        out = decide_dispatch(in, on, {});
+        expect_safe(out, in, on);
+        assert(single_level(out) <= kBalancedSingleMaxLevel);
+        assert(out.hp1_level == 0 || out.hp2_level == 0 || abs(out.hp1_level - out.hp2_level) <= 1);
+      }
+    }
+}
 }  // namespace
 int main() {
   test_cold_weather_request_reaches_dispatch_and_deficit();
@@ -1619,5 +1722,7 @@ int main() {
   test_owner_holds_while_standby_follows_the_running_state();
   test_unusable_standby_counts_nothing();
   test_balanced_pairs_stay_one_level_apart();
+  test_duo_shortfall_takes_another_pair();
+  test_balanced_pairs_keep_single_low();
   return 0;
 }
