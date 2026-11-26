@@ -14,6 +14,10 @@ constexpr int kMaxLevel = 20;
 // dispatcher never chooses 1+3. Safety paths (a suspect unit, a running defrost, holds that rule out every
 // permitted pair) keep whatever pair is applied.
 constexpr int kMaxPairSpread = 1;
+// With balanced_pairs, one unit runs above this level only when no permitted pair covers the request. Two
+// units at low speed deliver the same heat for less electricity than one at high speed (measured at 0 °C:
+// 2+3 COP 3.8 against 0+8 COP 3.5), and the high-speed unit ices up sooner.
+constexpr int kBalancedSingleMaxLevel = 5;
 constexpr uint32_t kTopologyHoldMs = 180000, kDefrostHoldMs = 180000, kOilReturnHoldMs = 120000;
 // clang-format off
 enum class Reason : uint8_t {
@@ -311,13 +315,14 @@ inline bool fits_single_request(float output_w, float request_w, float tie_band_
   return output_w + tie_band_w >= request_w && output_w <= request_w + maximum_error_w;
 }
 inline Candidate upshift_held_single(const DispatchInput& in, const DispatchTuning& tuning,
-                                     const Candidate& alternative, float tie_band_w, float maximum_error_w) {
+                                     const Candidate& alternative, float tie_band_w, float maximum_error_w,
+                                     int max_level = kMaxLevel) {
   const bool hp1_running = applied_level(in.hp1) > 0;
   const auto& running = hp1_running ? in.hp1 : in.hp2;
   const int previous = applied_level(running);
 
   Candidate best;
-  for (int level = previous + 1; level <= kMaxLevel; ++level) {
+  for (int level = previous + 1; level <= std::min(max_level, kMaxLevel); ++level) {
     const auto candidate =
         make_candidate(in, tuning, hp1_running ? level : 0, hp1_running ? 0 : level, in.requested_w, true);
     if (!candidate.valid || !fits_single_request(candidate.thermal_w, in.requested_w, tie_band_w, maximum_error_w) ||
@@ -384,9 +389,12 @@ inline RunExtensionMinimum run_extension_minimum(const DispatchInput& in, const 
 
 inline Candidate pick_topology(const DispatchInput& in, const DispatchTuning& tuning, float target_w, int active_count,
                                float tie_band_w, bool require_confirmed = false,
-                               ConfirmedPower confirmed_power = nullptr) {
+                               ConfirmedPower confirmed_power = nullptr, int max_single_level = kMaxLevel) {
   Candidate chosen;
   float best_error_w = INFINITY;
+  const auto level_ok = [&](int hp1, int hp2) {
+    return topology(hp1, hp2) != 1 || std::max(hp1, hp2) <= max_single_level;
+  };
   const auto sufficient = [&](const Candidate& candidate) {
     if (!require_confirmed || confirmed_power == nullptr) return true;
     const int first = candidate.hp1_level, second = candidate.hp2_level;
@@ -399,14 +407,14 @@ inline Candidate pick_topology(const DispatchInput& in, const DispatchTuning& tu
   };
   for (int hp1 = 0; hp1 <= kMaxLevel; ++hp1)
     for (int hp2 = 0; hp2 <= (in.duo ? kMaxLevel : 0); ++hp2) {
-      if (topology(hp1, hp2) != active_count || !pair_spread_ok(tuning, hp1, hp2)) continue;
+      if (topology(hp1, hp2) != active_count || !pair_spread_ok(tuning, hp1, hp2) || !level_ok(hp1, hp2)) continue;
       const auto candidate = make_candidate(in, tuning, hp1, hp2, target_w);
       if (candidate.valid && candidate.active_count == active_count && sufficient(candidate))
         best_error_w = std::min(best_error_w, candidate.error_w);
     }
   for (int hp1 = 0; hp1 <= kMaxLevel; ++hp1)
     for (int hp2 = 0; hp2 <= (in.duo ? kMaxLevel : 0); ++hp2) {
-      if (topology(hp1, hp2) != active_count || !pair_spread_ok(tuning, hp1, hp2)) continue;
+      if (topology(hp1, hp2) != active_count || !pair_spread_ok(tuning, hp1, hp2) || !level_ok(hp1, hp2)) continue;
       const auto candidate = make_candidate(in, tuning, hp1, hp2, target_w);
       if (candidate.valid && candidate.active_count == active_count && candidate.error_w <= best_error_w + tie_band_w &&
           sufficient(candidate) && (!chosen.valid || better_candidate(candidate, chosen)))
@@ -510,7 +518,22 @@ inline DispatchDecision decide_dispatch(const DispatchInput& in, const DispatchT
     // Do not shed a running peer on temporary startup/oil-return power. When
     // Duo cannot safely run (including a forced stop or peak limit), Single
     // remains available even if it cannot cover the complete heat request.
-    const Candidate single = pick_topology(in, tuning, target_w, 1, tie_band_w, duo.valid, confirmed_power);
+    // With balanced pairs, a pair that delivers the request keeps one unit out of its high levels (see
+    // kBalancedSingleMaxLevel). A pair that only overshoots, as when a hold pins one unit high, does not.
+    const float maximum_error_w = std::max(tie_band_w, heat_advantage_w);
+    bool pair_covers = false;
+    if (tuning.balanced_pairs && duo.valid)
+      for (int hp1 = 1; hp1 <= kMaxLevel && !pair_covers; ++hp1)
+        for (int hp2 = std::max(1, hp1 - kMaxPairSpread); hp2 <= std::min(kMaxLevel, hp1 + kMaxPairSpread); ++hp2) {
+          const auto pair = make_candidate(in, tuning, hp1, hp2, target_w);
+          if (pair.valid && fits_single_request(pair.thermal_w, target_w, tie_band_w, maximum_error_w)) {
+            pair_covers = true;
+            break;
+          }
+        }
+    const int single_max_level = pair_covers ? kBalancedSingleMaxLevel : kMaxLevel;
+    const Candidate single =
+        pick_topology(in, tuning, target_w, 1, tie_band_w, duo.valid, confirmed_power, single_max_level);
     Candidate best;
     const bool have_best = single.valid || duo.valid;
     if (single.valid && duo.valid) {
@@ -526,6 +549,8 @@ inline DispatchDecision decide_dispatch(const DispatchInput& in, const DispatchT
     // pair. Only the defrost hold keeps it as it is.
     Candidate current = applied;
     if (!pair_spread_ok(tuning, applied.hp1_level, applied.hp2_level)) current.valid = false;
+    if (current.active_count == 1 && std::max(current.hp1_level, current.hp2_level) > single_max_level)
+      current.valid = false;
     const bool valve_defrost = in.hp1.valve_defrost || in.hp2.valve_defrost;
     // A defrost is over in minutes and the unit then resumes where it was. Chasing the missing heat costs
     // more than it returns: the other unit pushed to a high frequency near freezing ices up and needs its
@@ -563,9 +588,14 @@ inline DispatchDecision decide_dispatch(const DispatchInput& in, const DispatchT
         keep_current = true, reason = Reason::OIL_RETURN_HOLD;
       else if (ordinary_hold || (topology_change && !change_allowed && heat_ok))
         keep_current = true, reason = ordinary_hold && valve_defrost ? Reason::DEFROST_HOLD : Reason::HOLD_ACTIVE;
-      else if (!heat_ok)
+      else if (!heat_ok) {
         reason = Reason::BETTER_HEAT;
-      else if (current.over_soft_w > best.over_soft_w + 40.0f)
+        // A running Duo that falls short first tries another pair. Leaving the Duo still needs the same
+        // margins as any other topology change; a shortfall alone does not justify stopping a unit.
+        if (topology_change && current.active_count == 2 && duo.valid &&
+            !(best.error_w + heat_advantage_w < duo.error_w || best.electrical_w + power_margin_w < duo.electrical_w))
+          best = duo;
+      } else if (current.over_soft_w > best.over_soft_w + 40.0f)
         reason = Reason::SOFT_GUARD;
       else if (current.electrical_w > best.electrical_w + (topology_change ? power_margin_w : 150.0f))
         reason = Reason::LESS_POWER;
@@ -590,7 +620,6 @@ inline DispatchDecision decide_dispatch(const DispatchInput& in, const DispatchT
         !tail_active(state.hp1_defrost, in.now_ms, kDefrostHoldMs) &&
         !tail_active(state.hp2_defrost, in.now_ms, kDefrostHoldMs) &&
         !tail_active(state.oil_return, in.now_ms, kOilReturnHoldMs)) {
-      const float maximum_error_w = std::max(tie_band_w, heat_advantage_w);
       const float electrical_limit_w = std::min(tuning.peak_limit_w, tuning.soft_limit_w + chosen.over_soft_w + 1.0f);
       const bool current_suffices =
           fits_single_request(current.thermal_w, in.requested_w, tie_band_w, maximum_error_w) &&
@@ -603,7 +632,7 @@ inline DispatchDecision decide_dispatch(const DispatchInput& in, const DispatchT
         chosen = current;
         reason = Reason::HOLD_ACTIVE;
       } else {
-        const auto upshift = upshift_held_single(in, tuning, chosen, tie_band_w, maximum_error_w);
+        const auto upshift = upshift_held_single(in, tuning, chosen, tie_band_w, maximum_error_w, single_max_level);
         if (upshift.valid) {
           chosen = upshift;
           reason = Reason::BETTER_HEAT;
@@ -654,7 +683,7 @@ inline DispatchDecision decide_dispatch(const DispatchInput& in, const DispatchT
       // Stand numbers are local to each HP. Re-evaluate the lead's own
       // entries rather than copying the other HP's numeric stand.
       Candidate lead;
-      for (int level = 1; level <= kMaxLevel; ++level) {
+      for (int level = 1; level <= single_max_level; ++level) {
         const auto candidate = make_candidate(in, tuning, in.lead_hp1 ? level : 0, in.lead_hp1 ? 0 : level, target_w);
         if (candidate.valid && candidate.error_w <= chosen.error_w + keep_margin_w &&
             candidate.electrical_w <= chosen.electrical_w + power_margin_w &&
