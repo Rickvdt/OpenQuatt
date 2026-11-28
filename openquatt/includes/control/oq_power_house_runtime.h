@@ -138,9 +138,9 @@ class Runtime {
     const bool hp2_online = true;
 #endif
     this->dispatch_state_ = oq_power_house_dispatch::observe_protection(
-        this->dispatch_state_, {now_ms, hp1_valve_defrost, hp2_valve_defrost, hp1_oil_return || hp2_oil_return,
-                                id(hp1_last_applied_level), hp2_applied_level, automatic_handoff, id(hp1_is_online),
-                                hp2_online});
+        this->dispatch_state_,
+        {now_ms, hp1_valve_defrost, hp2_valve_defrost, hp1_oil_return || hp2_oil_return, id(hp1_last_applied_level),
+         hp2_applied_level, automatic_handoff, id(hp1_is_online), hp2_online});
 #if OQ_TOPOLOGY_DUO
     if (this->dispatch_state_.handoff_incumbent == 0) this->handoff_real_start_ms_ = 0;
 #endif

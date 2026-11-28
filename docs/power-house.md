@@ -315,7 +315,7 @@ Op een Duo-installatie betekent **Solo** dat één compressor draait en **Duo** 
 
 De optimizer probeert de combinaties die op dat moment zijn toegestaan. Een stand kan afvallen door bijvoorbeeld een frequentiegrens, een elektrische limiet of de minimale rusttijd van een compressor. Iedere stand hoort bij een compressorfrequentie. Hoeveel warmte die oplevert en hoeveel stroom die vraagt, hangt onder meer af van de buiten- en watertemperatuur. De optimizer schat die vermogens met de vermogenskaart. Bij verse watermetingen rekent hij mee dat het water eerst door HP1 en daarna door HP2 stroomt. Zie [Vermogensvoorspelling bij de levelkeuze](#vermogensvoorspelling-bij-de-levelkeuze).
 
-Binnen Solo en binnen Duo zoekt de optimizer eerst welke combinaties het dichtst bij de warmtevraag komen. Bij vergelijkbare warmteafgifte geeft hij voorrang aan combinaties die beter binnen de elektrische limieten passen en minder stroom vragen. Daarna vergelijkt hij de beste Solo- en Duo-optie. Een duidelijk betere dekking van de vraag kan zwaarder wegen dan lager verbruik. De twee standen kunnen uiteenlopen als dat zuiniger is. Bij verder gelijkwaardige Duo-opties kan een kleiner verschil in compressorfrequentie de doorslag geven.
+Binnen Solo en binnen Duo zoekt de optimizer eerst welke combinaties het dichtst bij de warmtevraag komen. Bij vergelijkbare warmteafgifte geeft hij voorrang aan combinaties die beter binnen de elektrische limieten passen en minder stroom vragen. Daarna vergelijkt hij de beste Solo- en Duo-optie. Een duidelijk betere dekking van de vraag kan zwaarder wegen dan lager verbruik. De twee standen kunnen uiteenlopen als dat zuiniger is, behalve bij twee warmtepompen van hetzelfde type: die staan hoogstens één stand uit elkaar (zie [Evenwichtige standen](#evenwichtige-standen)). Bij verder gelijkwaardige Duo-opties kan een kleiner verschil in compressorfrequentie de doorslag geven.
 
 Stel dat Power House **4,4 kW warmte** vraagt. De volgende standen en vermogens zijn illustratief.
 
@@ -325,7 +325,7 @@ Stel dat Power House **4,4 kW warmte** vraagt. De volgende standen en vermogens 
 | `F5/F2` | 4,45 kW | 1.040 W |
 | `F4/F3` | 4,38 kW | 1.080 W |
 
-Ze komen alle drie dicht bij de vraag. `F5/F2` is hier de zuinigste kandidaat. Of de regeling ook echt naar die combinatie overgaat, hangt af van de huidige standen, wachttijden en beveiligingen.
+Ze komen alle drie dicht bij de vraag. `F5/F2` is hier de zuinigste kandidaat. Zijn beide warmtepompen van hetzelfde type, dan vallen `F5/F2` (drie standen verschil) en `F7/0` (één warmtepomp boven stand 5) af en kiest Power House `F4/F3`. Of de regeling ook echt naar die combinatie overgaat, hangt af van de huidige standen, wachttijden en beveiligingen.
 
 #### Wanneer blijft de huidige bedrijfsvorm draaien?
 
@@ -346,6 +346,8 @@ De V1/V1.5-kaart van Quatt begint bij 35 °C water. Bij lagere watertemperaturen
 Draait bij `Duo` maar één compressor, dan blijft de pomp van de stilstaande warmtepomp meedraaien. De vergelijking tussen één en twee warmtepompen telt dat verbruik mee: het basisverbruik van die warmtepomp plus het vermogen dat haar pomp zelf meldt, typisch 30-40 W. Bodemplaat- en carterverwarming tellen niet mee, want die hangen niet af van hoeveel warmtepompen draaien. Bij een start vanuit stilstand draait nog geen pomp en telt dit verbruik nog niet mee. De stroomlimiet rekent zonder dat verbruik.
 
 Ontdooit een draaiende warmtepomp, dan houden beide warmtepompen hun stand vast. Dat begint zodra de warmtepomp echt ontdooit (de vierwegklep is omgezet) en duurt tot drie minuten na het ontdooien, zodat de warmtepomp eerst weer op gang komt. Het systeem levert dan een paar minuten wat minder warmte. De andere warmtepomp gaat niet harder draaien om dat op te vangen: rond het vriespunt zou die daardoor zelf sneller bevriezen en kort daarna ook moeten ontdooien. Er start in die tijd ook geen warmtepomp bij en er stopt er geen. Daalt de warmtevraag duidelijk, of is de huidige stand niet meer toegestaan (stille modus, piekstroomlimiet), dan gaan de draaiende warmtepompen wel terug in stand. Beveiligingen en het wegvallen van de warmtevraag blijven voorgaan; de zachte stroomlimiet telt tijdens het ontdooien niet.
+
+#### Evenwichtige standen
 
 Bij `Duo` staan de twee warmtepompen nooit meer dan één stand uit elkaar, zoals de CiC dat ook doet: 2+3 kan, 1+3 niet. Dat geldt alleen als beide warmtepompen hetzelfde type zijn, want alleen dan betekent dezelfde stand ook dezelfde compressorfrequentie. Is de ene warmtepomp beperkt tot een lage stand, dan komt de extra capaciteit dus uit de andere warmtepomp alleen en niet uit een scheef paar. Tijdens het ontdooien blijft de combinatie staan die al draaide. Volgens het prestatiemodel kost een evenwichtig paar hooguit ongeveer 1 % meer stroom voor dezelfde warmte.
 

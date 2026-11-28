@@ -493,11 +493,18 @@ inline DispatchDecision retain_running_topology(const DispatchInput& in, const D
     if (!std::isfinite(confirmed) || confirmed < 0.0f || confirmed + heat_band_w < in.requested_w) return proposed;
   }
 
+  // With balanced pairs, the topology kept follows the same rules as the dispatcher: no pair further apart than
+  // allowed, and no unit kept alone above kBalancedSingleMaxLevel in place of a proposed pair.
+  const auto balanced_ok = [&](int a, int b) {
+    return pair_spread_ok(tuning, a, b) && !(tuning.balanced_pairs && next_count == 2 && topology(a, b) == 1 &&
+                                             std::max(a, b) > kBalancedSingleMaxLevel);
+  };
   Candidate keep;
   float keep_power = INFINITY;
   const float incumbent_band_w = heat_band_w - heat_reserve_w;
   for (int a = hp1 > 0 ? 1 : 0; a <= (hp1 > 0 ? kMaxLevel : 0); ++a) {
     for (int b = hp2 > 0 ? 1 : 0; b <= (hp2 > 0 ? kMaxLevel : 0); ++b) {
+      if (!balanced_ok(a, b)) continue;
       const auto candidate = make_candidate(in, tuning, a, b, in.requested_w);
       if (!comparable(candidate, incumbent_band_w)) continue;
       const float power = score(candidate);
@@ -513,7 +520,7 @@ inline DispatchDecision retain_running_topology(const DispatchInput& in, const D
 
   // Prefer the current levels if their scores are within the comparison precision.
   const auto current = make_candidate(in, tuning, hp1, hp2, in.requested_w);
-  if (comparable(current, std::min(incumbent_band_w, keep.error_w + heat_reserve_w)) &&
+  if (balanced_ok(hp1, hp2) && comparable(current, std::min(incumbent_band_w, keep.error_w + heat_reserve_w)) &&
       score(current) <= keep_power + 5.0f && !justifies_switch(score(current)))
     keep = current;
   proposed.hp1_level = keep.hp1_level;
@@ -724,9 +731,9 @@ inline DispatchDecision decide_dispatch(const DispatchInput& in, const DispatchT
         keep_current = true, reason = ordinary_hold && valve_defrost ? Reason::DEFROST_HOLD : Reason::HOLD_ACTIVE;
       else if (!heat_ok) {
         reason = Reason::BETTER_HEAT;
-        // A running Duo that falls short first tries another pair. Leaving the Duo still needs the same
-        // margins as any other topology change; a shortfall alone does not justify stopping a unit.
-        if (topology_change && current.active_count == 2 && duo.valid &&
+        // With balanced pairs, a running Duo that falls short first tries another pair. Leaving the Duo still
+        // needs the same margins as any other topology change; a shortfall alone does not justify stopping a unit.
+        if (tuning.balanced_pairs && topology_change && current.active_count == 2 && duo.valid &&
             !(best.error_w + heat_advantage_w < duo.error_w || best.electrical_w + power_margin_w < duo.electrical_w))
           best = duo;
       } else if (current.over_soft_w > best.over_soft_w + 40.0f)

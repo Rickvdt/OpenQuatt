@@ -178,10 +178,13 @@ boven de grens maakt pas plaats als een paar het doel ook met de holds haalt;
 tot dan blijft hij staan. Sluiten holds bij een draaiend toegestaan paar elk
 passend paar uit, dan blijft dat paar staan (`hold_active`) in plaats van een
 unit te stoppen. Een paar dat alleen te veel levert, telt niet als passend.
-Los daarvan, ook zonder `balanced_pairs`: valt een draaiende Duo tekort
-(`better_heat`), dan kiest de dispatcher eerst het beste paar. Uit Duo gaan mag
-dan alleen met dezelfde marges als elke topologiewissel (`topology_heat_advantage_w`
-of `topology_power_margin_w`).
+Valt met `balanced_pairs` een draaiende Duo tekort (`better_heat`), dan kiest de
+dispatcher eerst het beste paar. Uit Duo gaan mag dan alleen met dezelfde marges
+als elke topologiewissel (`topology_heat_advantage_w` of `topology_power_margin_w`).
+Zonder `balanced_pairs` kiest een tekort de beste kandidaat, zoals upstream.
+`retain_running_topology` volgt met `balanced_pairs` dezelfde regels: het houdt
+geen paar vast dat verder uit elkaar ligt, en geen Single boven de grens in
+plaats van een voorgesteld paar.
 
 ## Water Temperature Control: eerst een aanvoerdoel
 

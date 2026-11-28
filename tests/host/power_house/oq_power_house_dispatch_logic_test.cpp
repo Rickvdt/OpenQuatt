@@ -1163,6 +1163,42 @@ struct TopologyOffers {
   }
 };
 
+// The model rates one unit at 6 (or the far-apart 3+1) cheaper than the balanced pair the dispatcher proposes.
+struct BalancedOffers {
+  static std::array<float, 2> pair(const void*, int a, int b) {
+    if ((a == 6 && b == 0) || (a == 3 && b == 1)) return {4000.0f, 850.0f};
+    if ((a == 1 && b == 1) || (a == 4 && b == 0)) return {4000.0f, 900.0f};
+    return {NAN, NAN};
+  }
+  static float confirmed(const void*, int, int, float) { return 4000.0f; }
+};
+
+void test_retained_topology_follows_balanced_pairs() {
+  auto in = input(true);
+  in.requested_w = 4000.0f;
+  in.pair_power = &BalancedOffers::pair;
+  auto off = tuning();
+  auto on = tuning();
+  on.balanced_pairs = true;
+  // One unit running at 6, the dispatcher proposes 1+1: without the rule the cheaper single is kept.
+  in.hp1.candidate.previous_applied_level = 6;
+  const DispatchDecision start{1, 1, 0, Reason::BETTER_HEAT, 8000.0f, 0.0f, 4000.0f, true, false};
+  auto out = retain_running_topology(in, off, start, 100.0f, &BalancedOffers::confirmed);
+  assert(out.hp1_level == 6 && out.hp2_level == 0 && out.reason == Reason::HOLD_ACTIVE);
+  // With the rule the unit at 6 is not kept; a single within the limit still may be (4 is as cheap as 1+1).
+  out = retain_running_topology(in, on, start, 100.0f, &BalancedOffers::confirmed);
+  assert(out.hp1_level == 4 && out.hp2_level == 0 && out.reason == Reason::HOLD_ACTIVE);
+  // 3+1 running, the dispatcher proposes one unit at 4: the far-apart pair is never what is kept.
+  in.hp1.candidate.previous_applied_level = 3;
+  in.hp2.candidate.previous_applied_level = 1;
+  const DispatchDecision stop{4, 0, 1, Reason::LESS_POWER, 8000.0f, 0.0f, 4000.0f, true, false};
+  out = retain_running_topology(in, off, stop, 100.0f, &BalancedOffers::confirmed);
+  assert(out.hp1_level == 3 && out.hp2_level == 1);
+  // With the rule 3+1 is skipped; the balanced 1+1, as cheap as the proposed single, is kept instead.
+  out = retain_running_topology(in, on, stop, 100.0f, &BalancedOffers::confirmed);
+  assert(out.hp1_level == 1 && out.hp2_level == 1 && out.reason == Reason::HOLD_ACTIVE);
+}
+
 void test_voluntary_start_compares_heat_equivalent_power() {
   auto in = input(true);
   TopologyOffers offers;
@@ -1601,27 +1637,21 @@ DispatchInput high_single_bias(float bias_w) {
   return in;
 }
 void test_duo_shortfall_takes_another_pair() {
-  // Running 1+2 falls short. The model prefers one unit at 7 by 100 W, less than the topology margin: the
-  // shortfall moves to another pair instead of stopping a unit. Also without balanced pairs.
-  for (bool balanced : {false, true}) {
-    auto cfg = tuning();
-    cfg.balanced_pairs = balanced;
-    auto in = high_single_bias(100.0f);
-    in.hp1.candidate.previous_applied_level = 1;
-    in.hp2.candidate.previous_applied_level = 2;
-    auto out = decide_dispatch(in, cfg, {});
-    assert(out.output_valid && out.reason == Reason::BETTER_HEAT && out.hp1_level > 0 && out.hp2_level > 0 &&
-           out.expected_w == 4200.0f);
-    // Leaving the Duo still happens once the margins are met: here one unit saves 200 W per the model.
-    if (!balanced) {
-      in = high_single_bias(200.0f);
-      in.hp1.candidate.previous_applied_level = 1;
-      in.hp2.candidate.previous_applied_level = 2;
-      out = decide_dispatch(in, cfg, {});
-      assert(out.output_valid && out.reason == Reason::BETTER_HEAT && out.hp1_level + out.hp2_level == 7 &&
-             (out.hp1_level == 0 || out.hp2_level == 0));
-    }
-  }
+  // Running 1+2 falls short. The model prefers one unit at 7 by 100 W, less than the topology margin: with
+  // balanced pairs the shortfall moves to another pair instead of stopping a unit.
+  auto cfg = tuning();
+  cfg.balanced_pairs = true;
+  auto in = high_single_bias(100.0f);
+  in.hp1.candidate.previous_applied_level = 1;
+  in.hp2.candidate.previous_applied_level = 2;
+  auto out = decide_dispatch(in, cfg, {});
+  assert(out.output_valid && out.reason == Reason::BETTER_HEAT && out.hp1_level > 0 && out.hp2_level > 0 &&
+         out.expected_w == 4200.0f);
+  // Without balanced pairs the shortfall picks the best candidate as upstream does.
+  cfg.balanced_pairs = false;
+  out = decide_dispatch(in, cfg, {});
+  assert(out.output_valid && out.reason == Reason::BETTER_HEAT && out.hp1_level + out.hp2_level == 7 &&
+         (out.hp1_level == 0 || out.hp2_level == 0));
 }
 void test_balanced_pairs_keep_single_low() {
   auto off = tuning();
@@ -1753,5 +1783,6 @@ int main() {
   test_balanced_pairs_stay_one_level_apart();
   test_duo_shortfall_takes_another_pair();
   test_balanced_pairs_keep_single_low();
+  test_retained_topology_follows_balanced_pairs();
   return 0;
 }
