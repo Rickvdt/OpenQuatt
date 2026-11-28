@@ -256,7 +256,7 @@ inline bool electrical_limits_valid(const DispatchTuning& tuning) {
 }
 inline Candidate make_candidate(const DispatchInput& in, const DispatchTuning& tuning, int hp1_level, int hp2_level,
                                 float target_w, bool allow_feedback_upshift = false,
-                                PairPower reference_f1_power = nullptr) {
+                                PairPower reference_f1_power = nullptr, bool ignore_holds = false) {
   Candidate result;
   result.hp1_level = hp1_level;
   result.hp2_level = in.duo ? hp2_level : 0;
@@ -271,14 +271,15 @@ inline Candidate make_candidate(const DispatchInput& in, const DispatchTuning& t
     // Score only topologies the actuator can actually apply during its existing holds.
     // The reference F1 check asks what the unit can do once such a hold ends: a
     // level held after a restart is as temporary as a modulation hold.
-    if (reference_f1_power == nullptr && hp.fixed_level > 0 && applied_level(hp) > 0 && !hp.candidate.must_stop &&
+    // ignore_holds asks the same as the reference F1 check, on the live model: what once the holds end.
+    const bool holds_apply = reference_f1_power == nullptr && !ignore_holds;
+    if (holds_apply && hp.fixed_level > 0 && applied_level(hp) > 0 && !hp.candidate.must_stop &&
         level != hp.fixed_level)
       return false;
     // Let the ODU respond before another modulation change; this never forbids
     // a stop allowed by the existing runtime and safety gates below.
-    if (reference_f1_power == nullptr && level > 0 && hp.feedback_hold_level > 0 && applied_level(hp) > 0 &&
-        !hp.candidate.must_stop && level != hp.feedback_hold_level &&
-        !(allow_feedback_upshift && level > hp.feedback_hold_level))
+    if (holds_apply && level > 0 && hp.feedback_hold_level > 0 && applied_level(hp) > 0 && !hp.candidate.must_stop &&
+        level != hp.feedback_hold_level && !(allow_feedback_upshift && level > hp.feedback_hold_level))
       return false;
     if (level <= 0) return !hp.stop_inhibited || applied_level(hp) <= 0 || hp.candidate.must_stop;
     if (!hp_may_serve(hp)) return false;
@@ -617,6 +618,37 @@ inline DispatchDecision decide_dispatch(const DispatchInput& in, const DispatchT
             ? tuning.topology_heat_advantage_w
             : 450.0f;
     const Candidate duo = pick_topology(in, tuning, target_w, 2, tie_band_w);
+    const Candidate applied = make_candidate(in, tuning, applied_level(in.hp1), applied_level(in.hp2), target_w);
+    // An applied pair further apart than allowed is never kept; the choice below moves to a permitted
+    // pair. Only the defrost hold keeps it as it is.
+    Candidate current = applied;
+    if (!pair_spread_ok(tuning, applied.hp1_level, applied.hp2_level)) current.valid = false;
+    // With balanced pairs, one unit stays out of its high levels while a permitted pair can deliver the
+    // request (kBalancedSingleMaxLevel). Whether a pair can is asked without the compressor holds: those end
+    // within seconds, and a hold pinning one unit of a running pair must not open the way to a stop and
+    // the other unit alone at 90 Hz. A pair that only overshoots does not count.
+    const float maximum_error_w = std::max(tie_band_w, heat_advantage_w);
+    const auto balanced_pair_fits = [&](bool ignore_holds) {
+      for (int hp1 = 1; hp1 <= kMaxLevel; ++hp1)
+        for (int hp2 = std::max(1, hp1 - kMaxPairSpread); hp2 <= std::min(kMaxLevel, hp1 + kMaxPairSpread); ++hp2) {
+          const auto pair = make_candidate(in, tuning, hp1, hp2, target_w, false, nullptr, ignore_holds);
+          if (pair.valid && fits_single_request(pair.thermal_w, target_w, tie_band_w, maximum_error_w)) return true;
+        }
+      return false;
+    };
+    const bool pair_could_cover = tuning.balanced_pairs && balanced_pair_fits(true);
+    const bool pair_fits_now = pair_could_cover && balanced_pair_fits(false);
+    int single_max_level = pair_could_cover ? kBalancedSingleMaxLevel : kMaxLevel;
+    const int current_single_level =
+        current.valid && current.active_count == 1 ? std::max(current.hp1_level, current.hp2_level) : 0;
+    if (current_single_level > single_max_level) {
+      // A unit already running alone above the limit is joined by the other once a pair delivers now. While
+      // holds still rule that out it stays where it is, and the comparison may keep it there.
+      if (pair_fits_now)
+        current.valid = false;
+      else
+        single_max_level = current_single_level;
+    }
     // Do not shed a running peer on temporary startup/oil-return power. When
     // Duo cannot safely run (including a forced stop or peak limit), Single
     // remains available even if it cannot cover the complete heat request.
@@ -641,20 +673,6 @@ inline DispatchDecision decide_dispatch(const DispatchInput& in, const DispatchT
             std::isfinite(successor_heat) && successor_heat > 0.0f && successor_heat + tie_band_w >= in.requested_w;
       }
     }
-    // With balanced pairs, a pair that delivers the request keeps one unit out of its high levels (see
-    // kBalancedSingleMaxLevel). A pair that only overshoots, as when a hold pins one unit high, does not.
-    const float maximum_error_w = std::max(tie_band_w, heat_advantage_w);
-    bool pair_covers = false;
-    if (tuning.balanced_pairs && duo.valid)
-      for (int hp1 = 1; hp1 <= kMaxLevel && !pair_covers; ++hp1)
-        for (int hp2 = std::max(1, hp1 - kMaxPairSpread); hp2 <= std::min(kMaxLevel, hp1 + kMaxPairSpread); ++hp2) {
-          const auto pair = make_candidate(in, tuning, hp1, hp2, target_w);
-          if (pair.valid && fits_single_request(pair.thermal_w, target_w, tie_band_w, maximum_error_w)) {
-            pair_covers = true;
-            break;
-          }
-        }
-    const int single_max_level = pair_covers ? kBalancedSingleMaxLevel : kMaxLevel;
     const Candidate single = pick_topology(in, tuning, target_w, 1, tie_band_w, duo.valid, confirmed_power,
                                            protected_incumbent, successor_current_level_ready, single_max_level);
     Candidate best;
@@ -667,13 +685,6 @@ inline DispatchDecision decide_dispatch(const DispatchInput& in, const DispatchT
       best = single;
     else if (duo.valid)
       best = duo;
-    const Candidate applied = make_candidate(in, tuning, applied_level(in.hp1), applied_level(in.hp2), target_w);
-    // An applied pair further apart than allowed is never kept; the choice below moves to a permitted
-    // pair. Only the defrost hold keeps it as it is.
-    Candidate current = applied;
-    if (!pair_spread_ok(tuning, applied.hp1_level, applied.hp2_level)) current.valid = false;
-    if (current.active_count == 1 && std::max(current.hp1_level, current.hp2_level) > single_max_level)
-      current.valid = false;
     const bool valve_defrost = in.hp1.valve_defrost || in.hp2.valve_defrost;
     // A defrost is over in minutes and the unit then resumes where it was. Chasing the missing heat costs
     // more than it returns: the other unit pushed to a high frequency near freezing ices up and needs its
@@ -733,6 +744,15 @@ inline DispatchDecision decide_dispatch(const DispatchInput& in, const DispatchT
     // the applied pair stays until they end.
     if (!chosen.valid && !current.valid && applied.valid && applied.active_count > 0)
       chosen = applied, reason = Reason::KEEP_CURRENT;
+    // Nor do holds stop one unit of a running permitted pair. While they rule out every pair that would
+    // deliver (the ODU has not yet followed the last command), the pair stays as it is until they end.
+    if (pair_could_cover && !pair_fits_now && chosen.valid && chosen.active_count == 1 && applied.active_count == 2 &&
+        pair_spread_ok(tuning, applied.hp1_level, applied.hp2_level)) {
+      const auto kept = current.valid ? current
+                                      : make_candidate(in, tuning, applied.hp1_level, applied.hp2_level, target_w,
+                                                       false, nullptr, true);
+      if (kept.valid) chosen = kept, reason = Reason::HOLD_ACTIVE;
+    }
     // Before starting the other HP, give the held Single a chance to cover
     // the full request on its current command or a safe higher command.
     const auto& running = current.hp1_level > 0 ? in.hp1 : in.hp2;
