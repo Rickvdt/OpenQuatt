@@ -873,6 +873,35 @@ void test_balanced_pairs_keep_single_low() {
   in.hp1.feedback_hold_level = 4;
   out = decide_dispatch(in, on, {});
   assert(out.output_valid && single_level(out) <= kBalancedSingleMaxLevel);
+  // A hold on one unit of a running pair leaves only pairs that overshoot. The pair stays; neither a stop
+  // with the other unit alone at a high level (28 Nov 11:38) nor a cheaper low single that falls short.
+  in = high_single_bias(300.0f);
+  in.hp1.candidate.previous_applied_level = 5;
+  in.hp2.candidate.previous_applied_level = 4;
+  in.hp1.feedback_hold_level = 5;
+  out = decide_dispatch(in, on, {});
+  assert(out.output_valid && out.hp1_level == 5 && out.hp2_level == 4);
+  // The ODU has not followed the last step down yet: the hold still says 7 where 3 is applied (11:43).
+  in = high_single_bias(300.0f);
+  in.hp1.candidate.previous_applied_level = 4;
+  in.hp2.candidate.previous_applied_level = 3;
+  in.hp2.feedback_hold_level = 7;
+  out = decide_dispatch(in, on, {});
+  assert(out.output_valid && out.reason == Reason::HOLD_ACTIVE && out.hp1_level == 4 && out.hp2_level == 3);
+  // Held pairs in a sweep: never one unit above the limit.
+  for (int first = 1; first <= 10; ++first)
+    for (int second = std::max(1, first - 1); second <= std::min(10, first + 1); ++second)
+      for (int held = 0; held < 2; ++held)
+        for (float request = 1500.0f; request <= 9000.0f; request += 300.0f) {
+          in = high_single_bias(300.0f);
+          in.requested_w = request;
+          in.hp1.candidate.previous_applied_level = first;
+          in.hp2.candidate.previous_applied_level = second;
+          (held == 0 ? in.hp1 : in.hp2).feedback_hold_level = static_cast<uint8_t>(held == 0 ? first : second);
+          out = decide_dispatch(in, on, {});
+          expect_safe(out, in, on);
+          assert(single_level(out) <= kBalancedSingleMaxLevel);
+        }
   // Sweep: whenever a permitted pair fits the request, one unit never runs above the limit.
   for (int first = 0; first <= 10; ++first)
     for (int second = 0; second <= 10; ++second) {

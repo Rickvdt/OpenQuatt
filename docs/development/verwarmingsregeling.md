@@ -171,9 +171,13 @@ staat boven de regel.
 Met `balanced_pairs` is ook een Single boven `kBalancedSingleMaxLevel` (5) niet
 toegestaan zolang een toegestaan paar het doel haalt (`fits_single_request`
 met de tie band en `max(tie band, heat advantage)`). Dat geldt in
-`pick_topology`, voor de toegepaste Single, de upshift van een vastgehouden
-Single en de start op de lead. Een paar dat alleen te veel levert, zoals wanneer
-een hold de draaiende unit hoog vastzet, telt niet: dan blijft de Single staan.
+`pick_topology`, voor de upshift van een vastgehouden Single en de start op de
+lead. Of een paar dat kan, wordt zonder de compressorholds (feedback-hold,
+vast level na een herstart) bepaald: die duren seconden. Een toegepaste Single
+boven de grens maakt pas plaats als een paar het doel ook met de holds haalt;
+tot dan blijft hij staan. Sluiten holds bij een draaiend toegestaan paar elk
+passend paar uit, dan blijft dat paar staan (`hold_active`) in plaats van een
+unit te stoppen. Een paar dat alleen te veel levert, telt niet als passend.
 Los daarvan, ook zonder `balanced_pairs`: valt een draaiende Duo tekort
 (`better_heat`), dan kiest de dispatcher eerst het beste paar. Uit Duo gaan mag
 dan alleen met dezelfde marges als elke topologiewissel (`topology_heat_advantage_w`
